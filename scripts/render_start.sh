@@ -4,15 +4,23 @@ set -e
 
 echo "🚀 Starting Cryptonita Production System..."
 
-# Parse DATABASE_URL if it exists and create individual env vars
-if [ -n "$DATABASE_URL" ]; then
-    echo "📊 Configuring database connection..."
+# Only parse DATABASE_URL if DB variables are not already set
+if [ -z "$DB_PORT" ] && [ -n "$DATABASE_URL" ]; then
+    echo "📊 Parsing DATABASE_URL..."
     # Parse PostgreSQL URL: postgresql://user:password@host:port/database
     export DB_USER=$(echo $DATABASE_URL | sed -n 's/.*:\/\/\([^:]*\):.*/\1/p')
     export DB_PASSWORD=$(echo $DATABASE_URL | sed -n 's/.*:\/\/[^:]*:\([^@]*\)@.*/\1/p')
-    export DB_HOST=$(echo $DATABASE_URL | sed -n 's/.*@\([^:]*\):.*/\1/p')
-    export DB_PORT=$(echo $DATABASE_URL | sed -n 's/.*:\([0-9]*\)\/.*/\1/p')
-    export DB_NAME=$(echo $DATABASE_URL | sed -n 's/.*\/\(.*\)/\1/p')
+    export DB_HOST=$(echo $DATABASE_URL | sed -n 's/.*@\([^:/]*\).*/\1/p')
+    export DB_PORT=$(echo $DATABASE_URL | sed -n 's/.*:\([0-9]\+\)\/.*/\1/p')
+    # If port is empty, default to 5432
+    if [ -z "$DB_PORT" ]; then
+        export DB_PORT=5432
+    fi
+    export DB_NAME=$(echo $DATABASE_URL | sed -n 's/.*\/\([^?]*\).*/\1/p')
+
+    echo "✅ Parsed DATABASE_URL - DB_PORT: ${DB_PORT}"
+else
+    echo "✅ Using DB variables from environment - DB_PORT: ${DB_PORT}"
 fi
 
 # Run database setup/migrations
