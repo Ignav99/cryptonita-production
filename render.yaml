@@ -13,13 +13,10 @@ services:
     runtime: python
     plan: free  # Change to 'starter' for production (keeps running 24/7)
     region: oregon
-    branch: claude/proyecto-fase-d-011CUyziSCGSFJiiFCsLsnmf
-    buildCommand: ./scripts/render_build.sh
-    startCommand: ./scripts/render_start.sh
+    branch: main
+    buildCommand: bash scripts/render_build.sh
+    startCommand: bash scripts/render_start.sh
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9
-
       - key: ENVIRONMENT
         value: production
 
