@@ -20,6 +20,7 @@ import pandas as pd
 
 from config import settings
 from src.services.binance_service import BinanceService
+from src.services.binance_data_service import BinanceDataService
 from src.models.predictor import TradingPredictor
 from src.data.storage.db_manager import DatabaseManager
 from src.data.macro_data import MacroDataFetcher
@@ -46,10 +47,13 @@ class TradingBot:
         self.production_config = self._load_production_config()
 
         # Initialize services
-        self.binance = BinanceService()
+        self.binance = BinanceService()  # For trading (testnet)
+        self.binance_data = BinanceDataService()  # For historical data (production, read-only)
         self.predictor = TradingPredictor()
         self.db = DatabaseManager(settings.get_database_url())
         self.macro_fetcher = MacroDataFetcher()
+
+        logger.info("💡 Using Binance PRODUCTION for data, TESTNET for trading")
 
         # Bot state
         self.is_running = False
@@ -214,17 +218,17 @@ class TradingBot:
             logger.info("📊 Fetching macro data...")
             macro_data = await self.macro_fetcher.get_all_macro_data()
 
-            # 2. Get BTC data for correlation features
-            logger.info("📊 Fetching BTC data...")
-            btc_data = self.binance.get_historical_klines('BTCUSDT', '1d', 250)
+            # 2. Get BTC data for correlation features (from production)
+            logger.info("📊 Fetching BTC data from production...")
+            btc_data = self.binance_data.get_historical_klines('BTCUSDT', '1d', 250)
 
-            # 3. Fetch data for all tickers
-            logger.info(f"📊 Fetching data for {len(settings.TICKERS)} tickers...")
+            # 3. Fetch data for all tickers (from production)
+            logger.info(f"📊 Fetching data for {len(settings.TICKERS)} tickers from production...")
             tickers_data = {}
 
             for ticker in settings.TICKERS:
                 try:
-                    df = self.binance.get_historical_klines(ticker, '1d', 250)
+                    df = self.binance_data.get_historical_klines(ticker, '1d', 250)
                     if len(df) >= 200:
                         tickers_data[ticker] = df
                     else:

@@ -86,23 +86,26 @@ class Settings(BaseSettings):
     TICKERS: List[str] = [
         # Layer 1 / Layer 2 (Alta volatilidad, buen volumen)
         "SOLUSDT", "AVAXUSDT", "NEARUSDT", "APTUSDT", "SUIUSDT",
-        "SEIUSDT", "ARBUSDT", "OPUSDT", "INJUSDT", "FTMUSDT",
+        "SEIUSDT", "ARBUSDT", "OPUSDT", "INJUSDT",
+        # FTMUSDT removed - symbol changed
 
         # DeFi (Alto potencial de pumps por noticias)
-        "UNIUSDT", "AAVEUSDT", "MKRUSDT", "LDOUSDT", "RUNEUSDT",
+        "UNIUSDT", "AAVEUSDT", "LDOUSDT", "RUNEUSDT",
         "CRVUSDT", "GMXUSDT", "DYDXUSDT",
+        # MKRUSDT removed - not available on Binance
 
         # Gaming / Metaverse (Muy volátiles, eventos frecuentes)
         "SANDUSDT", "MANAUSDT", "AXSUSDT", "IMXUSDT", "GALAUSDT",
 
         # AI / Compute (Tendencia 2024-2025, alta volatilidad)
-        "FETUSDT", "AGIXUSDT", "WLDUSDT", "RENDERUSDT",
+        "FETUSDT", "WLDUSDT", "RENDERUSDT",
+        # AGIXUSDT removed - merged with other tokens
 
         # Memecoins (Alto volumen y volatilidad extrema)
         "DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "FLOKIUSDT", "BONKUSDT",
 
         # Otros altcoins sólidos (volatilidad media-alta)
-        "DOTUSDT", "ATOMUSDT", "ADAUSDT", "MATICUSDT", "LINKUSDT",
+        "DOTUSDT", "ATOMUSDT", "ADAUSDT", "POLUSDT", "LINKUSDT",  # POL is MATIC rebranded
         "ICPUSDT", "FILUSDT", "HBARUSDT", "VETUSDT", "ALGOUSDT"
     ]
 
