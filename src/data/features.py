@@ -378,10 +378,24 @@ class FeatureEngineer:
 
         # Select only required features
         try:
+            # Extract ONLY the 42 required features, excluding OHLCV and intermediate calculations
             feature_df = df[self.required_features].copy()
+
+            # Drop any NaN rows
+            feature_df = feature_df.dropna()
+
             return feature_df
         except KeyError as e:
             logger.error(f"❌ Missing features: {e}")
+            # Print which features are available vs required
+            available = set(df.columns)
+            required = set(self.required_features)
+            missing = required - available
+            extra = available - required
+            if missing:
+                logger.error(f"Missing features: {missing}")
+            if extra:
+                logger.debug(f"Extra columns (will be ignored): {extra}")
             return pd.DataFrame()
 
     def calculate_single_prediction_features(

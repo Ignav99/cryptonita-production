@@ -260,11 +260,11 @@ class TradingBot:
 
             logger.info(f"📊 Signals: {buy_signals} BUY / {total_signals} total")
 
-            # 6. Update bot status
+            # 6. Update bot status (convert numpy types to Python types)
             self.db.update_bot_status(
                 status='running',
-                total_signals=total_signals,
-                buy_signals=buy_signals,
+                total_signals=int(total_signals),  # Convert from numpy.int64 to int
+                buy_signals=int(buy_signals),      # Convert from numpy.int64 to int
                 cycle_number=self.cycle_number,
                 last_error=None
             )
