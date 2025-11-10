@@ -24,6 +24,7 @@ from src.services.binance_data_service import BinanceDataService
 from src.models.predictor import TradingPredictor
 from src.data.storage.db_manager import DatabaseManager
 from src.data.macro_data import MacroDataFetcher
+from src.trading.dynamic_risk_manager import DynamicRiskManager
 
 
 class TradingBot:
@@ -52,6 +53,7 @@ class TradingBot:
         self.predictor = TradingPredictor()
         self.db = DatabaseManager(settings.get_database_url())
         self.macro_fetcher = MacroDataFetcher()
+        self.risk_manager = DynamicRiskManager()  # Dynamic TP/SL management
 
         logger.info("💡 Using Binance PRODUCTION for data, TESTNET for trading")
 
@@ -370,22 +372,43 @@ class TradingBot:
 
         logger.success(f"✅ BUY executed: {executed_qty} {ticker} @ ${executed_price:.2f}")
 
-        # 7. Calculate TP/SL levels
-        tp_sl = self.predictor.calculate_stop_loss_take_profit(executed_price)
+        # 7. Calculate DYNAMIC TP/SL levels using risk manager
+        # Get macro data for market conditions
+        macro_data_dict = {
+            'fear_greed': signal.get('features', {}).get('fear_greed_value', 50),
+            'vix': signal.get('features', {}).get('vix', 20)
+        }
 
-        # 8. Place OCO order (Take Profit + Stop Loss)
-        logger.info(f"🎯 Placing TP/SL: TP=${tp_sl['take_profit']:.2f} SL=${tp_sl['stop_loss']:.2f}")
+        tp_sl = self.risk_manager.calculate_dynamic_tp_sl(
+            entry_price=executed_price,
+            ticker=ticker,
+            features=signal.get('features', {}),
+            market_conditions=macro_data_dict
+        )
+
+        # 8. Place OCO order for TP1 (first take profit level)
+        # We'll manage TP2, TP3 and trailing stop dynamically in monitoring
+        logger.info(
+            f"🎯 Dynamic TP/SL: SL=${tp_sl['stop_loss']:.4f} (-{tp_sl['stop_loss_pct']*100:.1f}%) | "
+            f"TP1=${tp_sl['tp1']:.4f} (+{tp_sl['tp1_pct']*100:.1f}%) | "
+            f"TP2=${tp_sl['tp2']:.4f} (+{tp_sl['tp2_pct']*100:.1f}%) | "
+            f"TP3=${tp_sl['tp3']:.4f} (+{tp_sl['tp3_pct']*100:.1f}%)"
+        )
+
+        # Place OCO for first TP level (30% of position)
+        oco_quantity = executed_qty * tp_sl['tp1_size']
+        oco_quantity = self.binance.round_quantity(ticker, oco_quantity)
 
         oco_order = self.binance.create_oco_order(
             symbol=ticker,
-            quantity=executed_qty,
-            price=tp_sl['take_profit'],
+            quantity=oco_quantity,
+            price=tp_sl['tp1'],
             stop_price=tp_sl['stop_loss'],
             stop_limit_price=tp_sl['stop_loss'] * 0.99  # Slightly below stop
         )
 
         if oco_order:
-            logger.success(f"✅ OCO order placed for {ticker}")
+            logger.success(f"✅ OCO order placed for {ticker} (TP1: 30% position)")
 
         # 9. Log trade to database
         # Get signal_id from the most recent signal for this ticker
@@ -406,18 +429,31 @@ class TradingBot:
             status='executed'
         )
 
-        # 10. Update position tracking
+        # 10. Update position tracking with dynamic TP/SL data
         self.positions[ticker] = {
             'quantity': executed_qty,
+            'remaining_quantity': executed_qty,  # Track remaining after partial exits
             'entry_price': executed_price,
             'current_price': executed_price,
-            'take_profit': tp_sl['take_profit'],
             'stop_loss': tp_sl['stop_loss'],
+            'tp1': tp_sl['tp1'],
+            'tp1_hit': False,
+            'tp2': tp_sl['tp2'],
+            'tp2_hit': False,
+            'tp3': tp_sl['tp3'],
+            'tp3_hit': False,
+            'tp1_size': tp_sl['tp1_size'],
+            'tp2_size': tp_sl['tp2_size'],
+            'tp3_size': tp_sl['tp3_size'],
+            'atr_pct': tp_sl['atr_pct'],
+            'trailing_stop_enabled': tp_sl['trailing_stop_enabled'],
+            'trailing_stop_active': False,
+            'entry_features': signal.get('features', {}),  # Save entry features for comparison
             'trade_id': trade_id,
             'entry_time': datetime.utcnow()
         }
 
-        logger.success(f"✅ Trade complete: {ticker} position opened")
+        logger.success(f"✅ Trade complete: {ticker} position opened with dynamic TP/SL")
 
     # ============================================
     # POSITION MONITORING (every 5 minutes)
@@ -440,12 +476,12 @@ class TradingBot:
                 await asyncio.sleep(60)
 
     async def _monitor_positions(self):
-        """Check all open positions"""
+        """Check all open positions with intelligent exit strategy"""
         logger.debug(f"👀 Monitoring {len(self.positions)} positions...")
 
         for ticker, position in list(self.positions.items()):
             try:
-                # Get current price
+                # 1. Get current price
                 current_price = self.binance.get_current_price(ticker)
                 if current_price is None:
                     continue
@@ -453,22 +489,105 @@ class TradingBot:
                 # Update position
                 position['current_price'] = current_price
 
-                # Calculate P&L
-                pnl = (current_price - position['entry_price']) * position['quantity']
+                # 2. Calculate P&L
+                pnl = (current_price - position['entry_price']) * position['remaining_quantity']
                 pnl_pct = ((current_price - position['entry_price']) / position['entry_price']) * 100
 
                 logger.debug(f"  {ticker}: ${current_price:.2f} | P&L: ${pnl:.2f} ({pnl_pct:+.2f}%)")
 
-                # Check if TP or SL hit (OCO should handle this, but double-check)
-                if current_price >= position['take_profit']:
-                    logger.success(f"🎯 TAKE PROFIT hit for {ticker}!")
-                    # Position should be closed by OCO order
+                # 3. Get current market features for intelligent exit
+                try:
+                    df = self.binance_data.get_historical_klines(ticker, '1d', 250)
+                    btc_data = self.binance_data.get_historical_klines('BTCUSDT', '1d', 250)
 
-                elif current_price <= position['stop_loss']:
-                    logger.warning(f"🛑 STOP LOSS hit for {ticker}!")
-                    # Position should be closed by OCO order
+                    # Get macro data
+                    macro_data = self.macro_fetcher.get_all_macro_data_sync()
 
-                # Update position in database
+                    # Calculate current features
+                    from src.data.features import FeatureEngineer
+                    feature_engineer = FeatureEngineer()
+                    df_with_features = feature_engineer.calculate_features(df, btc_data, macro_data)
+                    feature_vector = feature_engineer.get_feature_vector(df_with_features)
+
+                    if len(feature_vector) > 0:
+                        current_features = feature_vector.iloc[-1].to_dict()
+                    else:
+                        current_features = {}
+
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not get current features for {ticker}: {e}")
+                    current_features = {}
+
+                # 4. Apply Trailing Stop Loss
+                if position['trailing_stop_enabled']:
+                    new_stop_loss, activated = self.risk_manager.calculate_trailing_stop(
+                        entry_price=position['entry_price'],
+                        current_price=current_price,
+                        current_stop_loss=position['stop_loss'],
+                        atr_pct=position.get('atr_pct', 0.03)
+                    )
+
+                    if activated:
+                        old_sl = position['stop_loss']
+                        position['stop_loss'] = new_stop_loss
+                        position['trailing_stop_active'] = True
+                        logger.info(f"🔼 {ticker} Trailing SL: ${old_sl:.4f} → ${new_stop_loss:.4f}")
+
+                        # Update OCO order with new stop loss
+                        # Note: Binance requires canceling old OCO and creating new one
+                        # For simplicity, we'll just track it here
+
+                # 5. Check intelligent exit conditions
+                tp_levels = {
+                    'tp1': position['tp1'],
+                    'tp1_hit': position['tp1_hit'],
+                    'tp1_size': position['tp1_size'],
+                    'tp2': position['tp2'],
+                    'tp2_hit': position['tp2_hit'],
+                    'tp2_size': position['tp2_size'],
+                    'tp3': position['tp3'],
+                    'tp3_hit': position['tp3_hit'],
+                    'tp3_size': position['tp3_size']
+                }
+
+                exit_decision = self.risk_manager.check_exit_conditions(
+                    ticker=ticker,
+                    entry_price=position['entry_price'],
+                    current_price=current_price,
+                    position_size=position['remaining_quantity'],
+                    tp_levels=tp_levels,
+                    stop_loss=position['stop_loss'],
+                    features=current_features,
+                    entry_features=position.get('entry_features', {})
+                )
+
+                # 6. Execute exit if needed
+                if exit_decision['action'] == 'exit_full':
+                    logger.warning(f"🚪 {ticker} FULL EXIT: {exit_decision['reason']}")
+                    await self._execute_exit(ticker, position['remaining_quantity'], current_price, exit_decision['reason'])
+                    del self.positions[ticker]
+                    continue
+
+                elif exit_decision['action'] == 'exit_partial':
+                    exit_qty = position['remaining_quantity'] * exit_decision['quantity']
+                    logger.info(f"📤 {ticker} PARTIAL EXIT: {exit_decision['reason']} ({exit_decision['quantity']*100:.0f}%)")
+                    await self._execute_exit(ticker, exit_qty, current_price, exit_decision['reason'])
+
+                    position['remaining_quantity'] -= exit_qty
+
+                    # Mark TP level as hit if applicable
+                    if 'level' in exit_decision:
+                        level_key = f"{exit_decision['level'].lower()}_hit"
+                        position[level_key] = True
+
+                # 7. Check basic TP/SL (in case OCO failed)
+                if current_price <= position['stop_loss']:
+                    logger.warning(f"🛑 {ticker} STOP LOSS hit: ${current_price:.2f} <= ${position['stop_loss']:.2f}")
+                    await self._execute_exit(ticker, position['remaining_quantity'], current_price, 'stop_loss')
+                    del self.positions[ticker]
+                    continue
+
+                # 8. Update position in database
                 self.db.execute_command(
                     """
                     UPDATE positions
@@ -482,7 +601,7 @@ class TradingBot:
                     {
                         'ticker': ticker,
                         'current_price': current_price,
-                        'total_value': current_price * position['quantity'],
+                        'total_value': current_price * position['remaining_quantity'],
                         'pnl': pnl,
                         'pnl_pct': pnl_pct / 100,
                         'last_update': datetime.utcnow()
@@ -491,6 +610,38 @@ class TradingBot:
 
             except Exception as e:
                 logger.error(f"❌ Error monitoring {ticker}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+
+    async def _execute_exit(self, ticker: str, quantity: float, price: float, reason: str):
+        """Execute exit (sell) for a position or partial position"""
+        try:
+            logger.info(f"💰 Executing SELL: {quantity} {ticker} @ ${price:.4f}")
+
+            # Round quantity
+            quantity = self.binance.round_quantity(ticker, quantity)
+
+            # Execute market sell
+            order = self.binance.create_market_sell_order(ticker, quantity)
+
+            if order:
+                executed_price = float(order.get('fills', [{}])[0].get('price', price))
+                executed_qty = float(order['executedQty'])
+                logger.success(f"✅ SELL executed: {executed_qty} {ticker} @ ${executed_price:.2f} | Reason: {reason}")
+
+                # Log to database
+                self.db.save_trade(
+                    signal_id=0,
+                    ticker=ticker,
+                    action='SELL',
+                    quantity=executed_qty,
+                    price=executed_price,
+                    total_value=executed_price * executed_qty,
+                    status='executed'
+                )
+
+        except Exception as e:
+            logger.error(f"❌ Exit failed for {ticker}: {e}")
 
     # ============================================
     # UTILITIES
