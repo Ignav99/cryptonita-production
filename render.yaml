@@ -1,0 +1,82 @@
+services:
+  # PostgreSQL Database
+  - type: pserv
+    name: cryptonita-db
+    plan: free
+    databaseName: cryptonita_production
+    databaseUser: cryptonita_admin
+    region: oregon
+
+  # Web Service (API + Frontend + Bot)
+  - type: web
+    name: cryptonita-bot
+    runtime: python
+    plan: free  # Change to 'starter' for production (keeps running 24/7)
+    region: oregon
+    branch: claude/proyecto-fase-d-011CUyziSCGSFJiiFCsLsnmf
+    buildCommand: ./scripts/render_build.sh
+    startCommand: ./scripts/render_start.sh
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+
+      - key: ENVIRONMENT
+        value: production
+
+      - key: TRADING_MODE
+        value: testnet
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cryptonita-db
+          property: connectionString
+
+      - key: BINANCE_API_KEY
+        sync: false  # Set in Render dashboard (for production trading)
+
+      - key: BINANCE_API_SECRET
+        sync: false  # Set in Render dashboard
+
+      - key: BINANCE_TESTNET_API_KEY
+        sync: false  # Set in Render dashboard
+
+      - key: BINANCE_TESTNET_API_SECRET
+        sync: false  # Set in Render dashboard
+
+      - key: SECRET_KEY
+        generateValue: true  # Auto-generate JWT secret
+
+      - key: ALGORITHM
+        value: HS256
+
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: 1440
+
+      - key: API_HOST
+        value: 0.0.0.0
+
+      - key: API_PORT
+        value: 8000
+
+      - key: REDIS_URL
+        value: redis://localhost:6379/0
+
+      - key: INITIAL_CAPITAL
+        value: 10000
+
+      - key: MAX_POSITION_SIZE_USD
+        value: 500
+
+      - key: MAX_DAILY_LOSS_USD
+        value: 200
+
+      - key: MAX_TOTAL_RISK_PERCENT
+        value: 2.0
+
+      - key: REQUIRE_MANUAL_APPROVAL
+        value: false  # Set to true if you want manual approval in production
+
+      - key: LOG_LEVEL
+        value: INFO
+
+    healthCheckPath: /health
