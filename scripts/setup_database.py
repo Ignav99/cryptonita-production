@@ -14,7 +14,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import settings
-from data.storage.db_manager import DatabaseManager
+from src.data.storage.db_manager import DatabaseManager
 
 CREATE_TABLES_SQL = """
 -- Crypto prices table (existing)
