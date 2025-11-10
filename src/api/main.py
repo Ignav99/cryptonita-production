@@ -58,10 +58,7 @@ async def root():
     Serve frontend dashboard HTML
     """
     # Try to serve built frontend first
-    if index_file.exists():
-        # Read and serve the HTML, replacing /assets/ with /static/ if needed
-        html_content = index_file.read_text()
-        return HTMLResponse(content=html_content)
+    index_file = FRONTEND_DIST / "index.html"
 
     if index_file.exists():
         return index_file.read_text()
