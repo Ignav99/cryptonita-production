@@ -1,13 +1,16 @@
 """
 FEATURE ENGINEERING - MODEL V3
 ===============================
-Calcula las 42 features necesarias para el modelo de predicción V3
+Calcula las 48 features necesarias para el modelo de predicción V3
 
-Features V3 (42 total):
+Features V3 (48 total):
+- 6 OHLCV + EMA (open, high, low, close, volume, ema_200)
 - 14 features originales (V1)
 - 15 features de tendencia (V2)
-- 5 features macro (V2)
 - 8 features de momentum avanzado (V3)
+- 5 features macro (V2)
+
+IMPORTANT: Model expects features in this exact order!
 """
 
 import pandas as pd
@@ -27,8 +30,23 @@ class FeatureEngineer:
         logger.info(f"✅ Feature Engineer initialized - {len(self.required_features)} features")
 
     def _load_required_features(self) -> List[str]:
-        """Load required features from V3 config"""
+        """
+        Load required features from V3 config
+
+        IMPORTANT: Model was trained with 48 features in this exact order:
+        - First 6: OHLCV + ema_200 (from raw data)
+        - Next 42: Calculated features
+
+        DO NOT change the order!
+        """
         return [
+            # OHLCV + EMA (6 features) - Required by model first
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "ema_200",
             # Original V1 (14 features)
             "price_to_ema200",
             "atr_pct",
@@ -60,12 +78,6 @@ class FeatureEngineer:
             "price_position_20d",
             "momentum_strength",
             "body_trend_ratio",
-            # Macro V2 (5 features) - will be added separately
-            "fear_greed_value",
-            "funding_rate",
-            "spx",
-            "spx_change_7d",
-            "vix",
             # Advanced Momentum V3 (8 features)
             "price_jerk_3d",
             "volume_jerk_3d",
@@ -74,7 +86,13 @@ class FeatureEngineer:
             "momentum_vs_btc_3d",
             "beta_acceleration",
             "volatility_spike_ratio",
-            "hl_expansion_rate"
+            "hl_expansion_rate",
+            # Macro V2 (5 features) - Added last
+            "fear_greed_value",
+            "funding_rate",
+            "spx",
+            "spx_change_7d",
+            "vix"
         ]
 
     def calculate_features(
@@ -363,13 +381,13 @@ class FeatureEngineer:
 
     def get_feature_vector(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Extract only the required 42 features in correct order
+        Extract only the required 48 features in correct order
 
         Args:
             df: DataFrame with all calculated features
 
         Returns:
-            DataFrame with only the 42 required features
+            DataFrame with only the 48 required features (OHLCV + ema_200 + 42 calculated)
         """
         # Get the latest row (most recent data)
         if len(df) == 0:
@@ -378,7 +396,8 @@ class FeatureEngineer:
 
         # Select only required features
         try:
-            # Extract ONLY the 42 required features, excluding OHLCV and intermediate calculations
+            # Extract ONLY the 48 required features (OHLCV + ema_200 + calculated features)
+            # in the exact order the model expects
             feature_df = df[self.required_features].copy()
 
             # Drop any NaN rows
