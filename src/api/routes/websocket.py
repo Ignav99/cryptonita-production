@@ -2,14 +2,39 @@
 WebSocket Routes for Real-time Updates
 """
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from typing import List
+from typing import List, Any
 import asyncio
 import json
 from loguru import logger
 from datetime import datetime
+import pandas as pd
 
 from config import settings
 from src.data.storage.db_manager import DatabaseManager
+
+
+def serialize_for_json(obj: Any) -> Any:
+    """
+    Convert non-JSON-serializable objects to JSON-serializable format
+
+    Handles:
+    - pandas Timestamp -> ISO string
+    - datetime -> ISO string
+    - numpy types -> Python types
+    - pandas Series/DataFrame -> dict/list
+    """
+    if pd.isna(obj):
+        return None
+    elif isinstance(obj, (pd.Timestamp, datetime)):
+        return obj.isoformat()
+    elif isinstance(obj, dict):
+        return {k: serialize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_for_json(item) for item in obj]
+    elif hasattr(obj, 'item'):  # numpy types
+        return obj.item()
+    else:
+        return obj
 
 router = APIRouter(tags=["WebSocket"])
 
@@ -76,13 +101,13 @@ async def websocket_dashboard(websocket: WebSocket):
                 recent_signals = db.get_recent_signals(limit=10)
                 recent_trades = db.get_recent_trades(limit=10)
 
-                # Prepare update message
+                # Prepare update message with serialization
                 update = {
                     "type": "dashboard_update",
                     "timestamp": datetime.utcnow().isoformat(),
                     "data": {
-                        "stats": stats,
-                        "bot_status": bot_status,
+                        "stats": serialize_for_json(stats),
+                        "bot_status": serialize_for_json(bot_status),
                         "recent_signals_count": len(recent_signals),
                         "recent_trades_count": len(recent_trades)
                     }
@@ -126,7 +151,11 @@ async def websocket_signals(websocket: WebSocket):
 
                     # Check if this is a new signal
                     if signal_id > last_signal_id:
-                        # New signal detected
+                        # New signal detected - serialize timestamp properly
+                        signal_timestamp = latest_signal['timestamp']
+                        if isinstance(signal_timestamp, (pd.Timestamp, datetime)):
+                            signal_timestamp = signal_timestamp.isoformat()
+
                         update = {
                             "type": "new_signal",
                             "timestamp": datetime.utcnow().isoformat(),
@@ -135,7 +164,7 @@ async def websocket_signals(websocket: WebSocket):
                                 "ticker": latest_signal['ticker'],
                                 "signal_type": latest_signal['signal_type'],
                                 "probability": float(latest_signal['probability']),
-                                "timestamp": latest_signal['timestamp'].isoformat()
+                                "timestamp": signal_timestamp
                             }
                         }
 
