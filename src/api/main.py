@@ -38,10 +38,17 @@ app.include_router(dashboard.router, prefix="/api")
 app.include_router(controls.router, prefix="/api")
 app.include_router(websocket.router, prefix="/api")
 
-# Serve static files (frontend)
+# Serve static files (frontend - after build)
 FRONTEND_DIR = Path(__file__).parent.parent.parent / "frontend"
-if FRONTEND_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR / "static")), name="static")
+FRONTEND_DIST = FRONTEND_DIR / "dist"
+
+# Only mount static files if frontend is built
+if FRONTEND_DIST.exists() and (FRONTEND_DIST / "assets").exists():
+    try:
+        app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
+        logger.info(f"✅ Frontend assets mounted from {FRONTEND_DIST / 'assets'}")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not mount frontend assets: {e}")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -49,7 +56,8 @@ async def root():
     """
     Serve frontend dashboard HTML
     """
-    index_file = FRONTEND_DIR / "index.html"
+    # Try to serve built frontend first
+    index_file = FRONTEND_DIST / "index.html"
 
     if index_file.exists():
         return index_file.read_text()
