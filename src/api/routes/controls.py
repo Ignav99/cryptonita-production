@@ -10,11 +10,15 @@ from src.api.schemas.controls import (
     StartBotRequest, StopBotRequest, ManualTradeRequest, BotControlResponse
 )
 from src.data.storage.db_manager import DatabaseManager
+from src.bot.bot_manager import BotManager
 
 router = APIRouter(prefix="/controls", tags=["Bot Controls"])
 
 # Database instance
 db = DatabaseManager(settings.get_database_url())
+
+# Bot process manager
+bot_manager = BotManager()
 
 
 @router.post("/start", response_model=BotControlResponse)
@@ -26,22 +30,33 @@ async def start_bot(
     Start the trading bot
     """
     try:
-        # Update bot status to 'running'
-        db.update_bot_status(
-            status='running',
-            total_signals=0,
-            buy_signals=0,
-            cycle_number=1,
-            last_error=None
-        )
+        # Start bot process
+        result = bot_manager.start(mode=request.mode)
 
-        logger.info(f"🚀 Bot started in {request.mode} mode by {current_user['username']}")
+        if result["success"]:
+            # Update bot status in database
+            db.update_bot_status(
+                status='running',
+                total_signals=0,
+                buy_signals=0,
+                cycle_number=0,
+                last_error=None
+            )
 
-        return BotControlResponse(
-            success=True,
-            message=f"Bot started in {request.mode} mode",
-            status="running"
-        )
+            logger.info(f"🚀 Bot started in {request.mode} mode by {current_user['username']} (PID: {result['pid']})")
+
+            return BotControlResponse(
+                success=True,
+                message=result["message"],
+                status="running"
+            )
+        else:
+            return BotControlResponse(
+                success=False,
+                message=result["message"],
+                status="stopped"
+            )
+
     except Exception as e:
         logger.error(f"❌ Failed to start bot: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -56,20 +71,23 @@ async def stop_bot(
     Stop the trading bot
     """
     try:
-        # Update bot status to 'stopped'
+        # Stop bot process
+        result = bot_manager.stop(reason=request.reason)
+
+        # Update bot status in database
         db.update_bot_status(
             status='stopped',
             total_signals=0,
             buy_signals=0,
             cycle_number=0,
-            last_error=request.reason
+            last_error=request.reason if not result["success"] else None
         )
 
         logger.info(f"🛑 Bot stopped by {current_user['username']}: {request.reason}")
 
         return BotControlResponse(
-            success=True,
-            message="Bot stopped successfully",
+            success=result["success"],
+            message=result["message"],
             status="stopped"
         )
     except Exception as e:
@@ -153,3 +171,48 @@ async def get_bot_config(current_user: dict = Depends(get_current_user)):
         "require_manual_approval": settings.REQUIRE_MANUAL_APPROVAL,
         "tickers_count": len(settings.TICKERS)
     }
+
+
+@router.get("/process-status")
+async def get_process_status(current_user: dict = Depends(get_current_user)):
+    """
+    Get bot process status (PID, CPU, Memory, Uptime)
+    """
+    try:
+        status = bot_manager.get_status()
+        return status
+    except Exception as e:
+        logger.error(f"❌ Failed to get process status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/restart", response_model=BotControlResponse)
+async def restart_bot(
+    request: StartBotRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Restart the trading bot
+    """
+    try:
+        result = bot_manager.restart(mode=request.mode)
+
+        if result["success"]:
+            db.update_bot_status(
+                status='running',
+                total_signals=0,
+                buy_signals=0,
+                cycle_number=0,
+                last_error=None
+            )
+
+        logger.info(f"🔄 Bot restarted by {current_user['username']}")
+
+        return BotControlResponse(
+            success=result["success"],
+            message=result["message"],
+            status="running" if result["success"] else "stopped"
+        )
+    except Exception as e:
+        logger.error(f"❌ Failed to restart bot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
