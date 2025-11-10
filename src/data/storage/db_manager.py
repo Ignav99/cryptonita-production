@@ -461,11 +461,13 @@ class DatabaseManager:
 
             # Total portfolio value
             portfolio_query = "SELECT COALESCE(SUM(total_value), 0) as total FROM positions"
-            portfolio_value = float(self.execute_query(portfolio_query).iloc[0]['total'])
+            portfolio_result = self.execute_query(portfolio_query).iloc[0]['total']
+            portfolio_value = float(portfolio_result) if portfolio_result is not None else 0.0
 
             # Total P&L
             pnl_query = "SELECT COALESCE(SUM(pnl), 0) as total FROM positions"
-            total_pnl = float(self.execute_query(pnl_query).iloc[0]['total'])
+            pnl_result = self.execute_query(pnl_query).iloc[0]['total']
+            total_pnl = float(pnl_result) if pnl_result is not None else 0.0
 
             # Win rate (from executed trades)
             win_rate_query = """
@@ -474,7 +476,10 @@ class DatabaseManager:
             FROM positions
             """
             win_rate_result = self.execute_query(win_rate_query)
-            win_rate = float(win_rate_result.iloc[0]['win_rate']) if len(win_rate_result) > 0 else 0.0
+            if len(win_rate_result) > 0 and win_rate_result.iloc[0]['win_rate'] is not None:
+                win_rate = float(win_rate_result.iloc[0]['win_rate'])
+            else:
+                win_rate = 0.0
 
             return {
                 'total_trades': int(total_trades),
