@@ -1,0 +1,45 @@
+{
+  "bot_info": {
+    "name": "Cryptonita Trading Bot",
+    "version": "3.0",
+    "description": "Automated trading bot using XGBoost Model V3"
+  },
+  "trading": {
+    "scan_interval_hours": 12,
+    "position_monitoring_minutes": 5,
+    "auto_trading_enabled": true,
+    "require_manual_approval": false,
+    "testnet_capital_usd": 5000,
+    "production_capital_usd": 10000
+  },
+  "risk_management": {
+    "max_positions": 10,
+    "position_size_pct": 0.10,
+    "max_position_size_usd": 500,
+    "max_position_size_pct": 0.15,
+    "take_profit_pct": 0.15,
+    "stop_loss_pct": 0.05,
+    "max_portfolio_risk_pct": 0.30,
+    "max_daily_loss_usd": 200,
+    "emergency_stop_on_drawdown_pct": 0.15,
+    "use_trailing_stop": false
+  },
+  "model": {
+    "threshold": 0.60,
+    "model_file": "PRODUCTION_SYSTEM/models/production_model_v3.json",
+    "features_config": "PRODUCTION_SYSTEM/configs/production_features_config_v3.json",
+    "features_count": 42,
+    "target": "Pumps >20% en 15 días"
+  },
+  "filters": {
+    "min_volume_usd_24h": 10000000,
+    "min_price_usd": 0.01,
+    "blacklist": []
+  },
+  "monitoring": {
+    "log_all_signals": true,
+    "log_all_trades": true,
+    "alert_on_error": true,
+    "save_performance_daily": true
+  }
+}
