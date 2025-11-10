@@ -34,14 +34,9 @@ apiClient.interceptors.response.use(
 // Auth API
 export const auth = {
   login: async (username, password) => {
-    const formData = new FormData();
-    formData.append('username', username);
-    formData.append('password', password);
-
-    const response = await apiClient.post('/auth/login', formData, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+    const response = await apiClient.post('/auth/login', {
+      username,
+      password,
     });
     return response.data;
   },
