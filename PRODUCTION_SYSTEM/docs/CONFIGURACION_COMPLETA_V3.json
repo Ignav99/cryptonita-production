@@ -1,0 +1,320 @@
+{
+  "timestamp": "2025-11-01T12:19:20.849078",
+  "system_info": {
+    "version": "3.0",
+    "nombre": "Crypto Trading System V3",
+    "descripcion": "Sistema de trading automatizado con features de momentum avanzado",
+    "fecha_creacion": "2025-10-30T18:01:14.265469",
+    "estado": "PRODUCCI\u00d3N ACTIVA",
+    "autor": "Sistema desarrollado iterativamente",
+    "iteraciones": "V1 \u2192 V2 \u2192 V3 (3 versiones validadas)"
+  },
+  "modelo": {
+    "info": {
+      "algoritmo": "XGBoost (Gradient Boosting)",
+      "tipo": "Clasificaci\u00f3n Binaria",
+      "objetivo": "Predecir pumps >20% en pr\u00f3ximos 15 d\u00edas",
+      "archivo": "models/production_model_v3.json",
+      "framework": "XGBoost",
+      "version_xgboost": "3.1.1"
+    },
+    "hiperparametros": {
+      "n_estimators": 300,
+      "max_depth": 6,
+      "learning_rate": 0.05,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8,
+      "min_child_weight": 1,
+      "gamma": 0,
+      "scale_pos_weight": 1.52,
+      "random_state": 42,
+      "eval_metric": "logloss",
+      "tree_method": "hist",
+      "objective": "binary:logistic"
+    },
+    "archivo": "models/production_model_v3.json"
+  },
+  "features": {
+    "total": 42,
+    "lista_completa": [
+      "price_to_ema200",
+      "atr_pct",
+      "price_change_14d",
+      "obv",
+      "obv_ratio",
+      "hl_ratio",
+      "volume_ratio_20",
+      "stoch_k",
+      "lower_shadow_ratio",
+      "upper_shadow_ratio",
+      "bullish_candles_3d",
+      "body_ratio",
+      "close_position",
+      "body_trend",
+      "momentum_3d",
+      "momentum_5d",
+      "momentum_7d",
+      "price_acceleration",
+      "volume_trend_ratio",
+      "volume_acceleration",
+      "atr_compression",
+      "hl_compression",
+      "green_candles_5d",
+      "green_candles_10d",
+      "higher_highs_5d",
+      "higher_lows_5d",
+      "price_position_20d",
+      "momentum_strength",
+      "body_trend_ratio",
+      "fear_greed_value",
+      "funding_rate",
+      "spx",
+      "spx_change_7d",
+      "vix",
+      "price_jerk_3d",
+      "volume_jerk_3d",
+      "price_explosion_ratio",
+      "volume_explosion_ratio",
+      "momentum_vs_btc_3d",
+      "beta_acceleration",
+      "volatility_spike_ratio",
+      "hl_expansion_rate"
+    ],
+    "por_categoria": {
+      "originales_v1": [
+        "price_to_ema200",
+        "atr_pct",
+        "price_change_14d",
+        "obv",
+        "obv_ratio",
+        "hl_ratio",
+        "volume_ratio_20",
+        "stoch_k",
+        "lower_shadow_ratio",
+        "upper_shadow_ratio",
+        "bullish_candles_3d",
+        "body_ratio",
+        "close_position",
+        "body_trend"
+      ],
+      "tendencia_v2": [
+        "momentum_3d",
+        "momentum_5d",
+        "momentum_7d",
+        "price_acceleration",
+        "volume_trend_ratio",
+        "volume_acceleration",
+        "atr_compression",
+        "hl_compression",
+        "green_candles_5d",
+        "green_candles_10d",
+        "higher_highs_5d",
+        "higher_lows_5d",
+        "price_position_20d",
+        "momentum_strength",
+        "body_trend_ratio"
+      ],
+      "macro_v2": [
+        "fear_greed_value",
+        "funding_rate",
+        "spx",
+        "spx_change_7d",
+        "vix"
+      ],
+      "momentum_v3": [
+        "price_jerk_3d",
+        "volume_jerk_3d",
+        "price_explosion_ratio",
+        "volume_explosion_ratio",
+        "momentum_vs_btc_3d",
+        "beta_acceleration",
+        "volatility_spike_ratio",
+        "hl_expansion_rate"
+      ]
+    },
+    "top_15_importance": [
+      {
+        "feature": "spx",
+        "importance": 6.260509967803955
+      },
+      {
+        "feature": "fear_greed_value",
+        "importance": 5.101301670074463
+      },
+      {
+        "feature": "atr_pct",
+        "importance": 4.703184127807617
+      },
+      {
+        "feature": "hl_ratio",
+        "importance": 4.6681599617004395
+      },
+      {
+        "feature": "spx_change_7d",
+        "importance": 4.573070526123047
+      },
+      {
+        "feature": "vix",
+        "importance": 4.102463245391846
+      },
+      {
+        "feature": "price_explosion_ratio",
+        "importance": 3.935476541519165
+      },
+      {
+        "feature": "obv",
+        "importance": 3.6818933486938477
+      },
+      {
+        "feature": "funding_rate",
+        "importance": 3.640228033065796
+      },
+      {
+        "feature": "price_position_20d",
+        "importance": 3.6364657878875732
+      },
+      {
+        "feature": "price_to_ema200",
+        "importance": 2.7808051109313965
+      },
+      {
+        "feature": "atr_compression",
+        "importance": 2.692814826965332
+      },
+      {
+        "feature": "stoch_k",
+        "importance": 2.465838670730591
+      },
+      {
+        "feature": "volume_trend_ratio",
+        "importance": 2.421194553375244
+      },
+      {
+        "feature": "price_change_14d",
+        "importance": 2.4204347133636475
+      }
+    ]
+  },
+  "datos": {
+    "dataset_completo": {
+      "archivo": "data/production_dataset_v3.csv",
+      "registros_totales": 49184,
+      "periodo": "2019-01-01 \u2192 2025-10-28",
+      "cryptos": 25,
+      "features": 42
+    },
+    "train_set": {
+      "periodo": "2022-01-01 \u2192 2024-05-30",
+      "registros": 39509,
+      "positivos": 15618,
+      "positivos_pct": "39.5%"
+    },
+    "test_set": {
+      "periodo": "2024-07-01 \u2192 2025-10-28",
+      "registros": 9675,
+      "positivos": 2538,
+      "positivos_pct": "26.2%"
+    }
+  },
+  "target": {
+    "variable": "target_v2",
+    "definicion": "Pump >20% en pr\u00f3ximos 15 d\u00edas",
+    "tipo": "Binario (0 = No pump, 1 = Pump)",
+    "criterio": "max_return_15d >= 0.20 (20%)",
+    "horizonte_temporal": "15 d\u00edas hacia adelante",
+    "versiones": {
+      "V1": "Pump >15% en 15 d\u00edas",
+      "V2/V3": "Pump >20% en 15 d\u00edas (m\u00e1s selectivo)"
+    }
+  },
+  "trading_rules": {
+    "position_size_pct": 0.1,
+    "max_position_size_pct": 15,
+    "take_profit_pct": 0.15,
+    "stop_loss_pct": 0.05,
+    "max_portfolio_risk_pct": 30,
+    "max_positions": 10,
+    "threshold": 0.6,
+    "max_portfolio_risk": 0.3
+  },
+  "performance": {
+    "test_period": "2024-07-01 to 2025-10-28",
+    "roi": 82.7,
+    "win_rate": 48.8,
+    "total_trades": 43,
+    "sharpe_ratio": 3.43,
+    "max_drawdown": 6.3,
+    "profit_factor": 3.1,
+    "avg_days_held": "TBD"
+  },
+  "comparacion_versiones": {
+    "V1": {
+      "roi": 18.1,
+      "win_rate": 32.5,
+      "trades": "N/A"
+    },
+    "V2": {
+      "roi": 45.7,
+      "win_rate": 50.0,
+      "trades": 23
+    },
+    "V3": {
+      "roi": 82.7,
+      "win_rate": 48.8,
+      "trades": 43
+    }
+  },
+  "workflow": {
+    "1_recoleccion": "Obtener datos diarios de exchanges y macro",
+    "2_preprocesamiento": "Calcular 42 features y limpiar datos",
+    "3_prediccion": "Generar probabilidades con modelo V3",
+    "4_gestion": "Abrir/cerrar posiciones seg\u00fan reglas",
+    "5_reentrenamiento": "Re-entrenar mensualmente con datos nuevos"
+  },
+  "archivos": {
+    "Modelos": [
+      "models/production_model_v3.json         \u2192 Modelo V3 entrenado"
+    ],
+    "Configuraciones": [
+      "configs/PRODUCTION_MASTER_CONFIG.json   \u2192 Config principal del sistema",
+      "configs/production_features_config_v3.json \u2192 Definici\u00f3n de features"
+    ],
+    "Datos": [
+      "data/production_dataset_v3.csv          \u2192 Dataset completo con 42 features"
+    ],
+    "An\u00e1lisis": [
+      "analysis/model_v3_results.json          \u2192 Resultados del modelo",
+      "analysis/backtest_v2_vs_v3.json         \u2192 Comparaci\u00f3n V2 vs V3"
+    ],
+    "Documentaci\u00f3n": [
+      "docs/README_V3.md                       \u2192 Documentaci\u00f3n completa"
+    ]
+  },
+  "cryptos_soportadas": [
+    "AAVE-USD",
+    "ADA-USD",
+    "ALGO-USD",
+    "APT-USD",
+    "ARB-USD",
+    "ATOM-USD",
+    "AVAX-USD",
+    "DOGE-USD",
+    "DOT-USD",
+    "FIL-USD",
+    "FTM-USD",
+    "GRT-USD",
+    "INJ-USD",
+    "LINK-USD",
+    "MANA-USD",
+    "MATIC-USD",
+    "NEAR-USD",
+    "OP-USD",
+    "RNDR-USD",
+    "RUNE-USD",
+    "SAND-USD",
+    "SOL-USD",
+    "STX-USD",
+    "SUI-USD",
+    "UNI-USD"
+  ]
+}

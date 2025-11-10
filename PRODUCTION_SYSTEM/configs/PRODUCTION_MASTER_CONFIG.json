@@ -1,0 +1,144 @@
+{
+  "system_info": {
+    "name": "Crypto Trading System V2 - Production",
+    "version": "3.0",
+    "created_date": "2025-10-30 15:57:36",
+    "status": "PRODUCTION",
+    "description": "Sistema V3 con features de momentum avanzado",
+    "last_update": "2025-10-30T18:01:14.265469"
+  },
+  "model": {
+    "name": "Hybrid_V2_070",
+    "type": "hybrid_v2",
+    "file": "models/production_model_v3.json",
+    "threshold": 0.7,
+    "features_count": 42,
+    "target": "Pumps >20% en 15 d\u00edas",
+    "version": "V3",
+    "features_config": "configs/production_features_config_v3.json",
+    "training_params": {
+      "n_estimators": 300,
+      "max_depth": 6,
+      "learning_rate": 0.05,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8,
+      "scale_pos_weight": 1.52,
+      "random_state": 42
+    }
+  },
+  "performance": {
+    "test_period": "2024-07-01 to 2025-10-28",
+    "roi": 82.7,
+    "win_rate": 48.8,
+    "total_trades": 43,
+    "sharpe_ratio": 3.43,
+    "max_drawdown": 6.3,
+    "profit_factor": 3.1,
+    "avg_days_held": "TBD"
+  },
+  "trading_rules": {
+    "position_size_pct": 0.1,
+    "max_position_size_pct": 15,
+    "take_profit_pct": 0.15,
+    "stop_loss_pct": 0.05,
+    "max_portfolio_risk_pct": 30,
+    "max_positions": 10,
+    "threshold": 0.6,
+    "max_portfolio_risk": 0.3
+  },
+  "features": {
+    "version": "V3",
+    "total": 42,
+    "breakdown": {
+      "original_v1": 14,
+      "trend_v2": 15,
+      "macro_v2": 5,
+      "momentum_advanced_v3": 8
+    },
+    "new_in_v3": [
+      "price_jerk_3d",
+      "volume_jerk_3d",
+      "price_explosion_ratio",
+      "volume_explosion_ratio",
+      "momentum_vs_btc_3d",
+      "beta_acceleration",
+      "volatility_spike_ratio",
+      "hl_expansion_rate"
+    ]
+  },
+  "improvements_history": [
+    {
+      "version": "1.0",
+      "roi": 18.1,
+      "description": "Sistema original con ensemble din\u00e1mico"
+    },
+    {
+      "version": "1.5",
+      "roi": 37.7,
+      "description": "Optimizaci\u00f3n de thresholds (0.85 \u2192 0.70)"
+    },
+    {
+      "version": "2.0",
+      "roi": 45.712746567777174,
+      "description": "Features de tendencia + target >20%"
+    },
+    {
+      "version": "V3",
+      "date": "2025-10-30T18:01:14.266727",
+      "improvement": "Features de momentum avanzado",
+      "roi_before": 46.1,
+      "roi_after": 82.7,
+      "improvement_pct": 79.6,
+      "key_changes": [
+        "A\u00f1adidas 8 features de momentum avanzado",
+        "Threshold ajustado de 0.70 a 0.60",
+        "ROI mejorado de 46.1% a 82.7%",
+        "Trades aumentados de 23 a 43"
+      ]
+    }
+  ],
+  "next_improvements": [
+    {
+      "priority": "HIGH",
+      "name": "Sistema de Review Manual",
+      "description": "Herramienta para revisar y etiquetar pumps manualmente",
+      "estimated_impact": "Win rate +5-10%"
+    },
+    {
+      "priority": "HIGH",
+      "name": "Optimizaci\u00f3n de Hiperpar\u00e1metros",
+      "description": "Grid search de max_depth, learning_rate, etc.",
+      "estimated_impact": "ROI +5-10%"
+    },
+    {
+      "priority": "MEDIUM",
+      "name": "Sentiment Analysis",
+      "description": "Integrar noticias/Twitter como features",
+      "estimated_impact": "Detectar pumps por noticias"
+    },
+    {
+      "priority": "MEDIUM",
+      "name": "Ensemble Mejorado",
+      "description": "Stacking con meta-modelo",
+      "estimated_impact": "ROI +3-5%"
+    },
+    {
+      "priority": "LOW",
+      "name": "Features Temporales",
+      "description": "Estacionalidad y ciclos de mercado",
+      "estimated_impact": "ROI +2-3%"
+    }
+  ],
+  "monitoring": {
+    "review_frequency": "Weekly",
+    "retrain_frequency": "Every 3 months",
+    "stop_trading_if": "Drawdown > 15% or WR < 30%",
+    "metrics_to_track": [
+      "ROI",
+      "Win Rate",
+      "Drawdown",
+      "Sharpe",
+      "Trades per week"
+    ]
+  }
+}
