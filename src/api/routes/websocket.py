@@ -119,8 +119,17 @@ async def websocket_dashboard(websocket: WebSocket):
                 # Wait before next update (every 5 seconds)
                 await asyncio.sleep(5)
 
+            except WebSocketDisconnect:
+                # Client disconnected, this is normal
+                break
             except Exception as e:
-                logger.error(f"❌ Error in WebSocket loop: {e}")
+                error_msg = str(e)
+                # Ignore normal disconnect messages
+                if "1001" in error_msg or "going away" in error_msg or "close frame" in error_msg:
+                    logger.debug(f"WebSocket client disconnected: {e}")
+                    break
+                else:
+                    logger.error(f"❌ Error in WebSocket loop: {e}")
                 await asyncio.sleep(5)
 
     except WebSocketDisconnect:
@@ -174,8 +183,17 @@ async def websocket_signals(websocket: WebSocket):
                 # Wait before checking again (every 2 seconds)
                 await asyncio.sleep(2)
 
+            except WebSocketDisconnect:
+                # Client disconnected, this is normal
+                break
             except Exception as e:
-                logger.error(f"❌ Error in signals WebSocket: {e}")
+                error_msg = str(e)
+                # Ignore normal disconnect messages
+                if "1001" in error_msg or "going away" in error_msg or "close frame" in error_msg:
+                    logger.debug(f"Signals WebSocket client disconnected: {e}")
+                    break
+                else:
+                    logger.error(f"❌ Error in signals WebSocket: {e}")
                 await asyncio.sleep(2)
 
     except WebSocketDisconnect:
