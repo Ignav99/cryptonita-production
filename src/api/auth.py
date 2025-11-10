@@ -106,13 +106,21 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 # Simple in-memory user store (for MVP)
 # In production, use database
-USERS_DB = {
-    "admin": {
-        "username": "admin",
-        "hashed_password": get_password_hash("cryptonita2024"),  # Default password
-        "disabled": False,
-    }
-}
+_USERS_DB = None
+
+
+def _init_users_db():
+    """Initialize users database (lazy loading to avoid bcrypt issues at import time)"""
+    global _USERS_DB
+    if _USERS_DB is None:
+        _USERS_DB = {
+            "admin": {
+                "username": "admin",
+                "hashed_password": get_password_hash("cryptonita2024"),  # Default password
+                "disabled": False,
+            }
+        }
+    return _USERS_DB
 
 
 def authenticate_user(username: str, password: str) -> Optional[dict]:
@@ -126,7 +134,8 @@ def authenticate_user(username: str, password: str) -> Optional[dict]:
     Returns:
         User dict if authenticated, None otherwise
     """
-    user = USERS_DB.get(username)
+    users_db = _init_users_db()
+    user = users_db.get(username)
     if not user:
         return None
     if not verify_password(password, user["hashed_password"]):
