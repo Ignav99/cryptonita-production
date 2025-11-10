@@ -74,15 +74,36 @@ class Settings(BaseSettings):
     MAX_POSITIONS: int = 10  # Max 10 simultaneous positions
 
     # ============================================
-    # SUPPORTED TICKERS
+    # SUPPORTED TICKERS (Altcoins volátiles para pumps +20%)
     # ============================================
+    # Criterios de selección:
+    # - Alta volatilidad (>5% movimiento diario típico)
+    # - Volumen >$20M USD/día
+    # - Market cap: $100M - $15B (excluye top 5 muy estables)
+    # - EXCLUYE: BTC, ETH, BNB (volatilidad <3%, no generan pumps +20%)
+    #
+    # Total: 40 monedas organizadas por categoría
     TICKERS: List[str] = [
-        "BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "SOLUSDT",
-        "XRPUSDT", "DOTUSDT", "DOGEUSDT", "AVAXUSDT", "MATICUSDT",
-        "LINKUSDT", "LTCUSDT", "UNIUSDT", "ATOMUSDT", "ETCUSDT",
-        "XLMUSDT", "VETUSDT", "ICPUSDT", "FILUSDT", "TRXUSDT",
-        "APTUSDT", "NEARUSDT", "AAVEUSDT", "ALGOUSDT", "SHIBUSDT",
-        "PEPEUSDT", "ARBUSDT", "OPUSDT", "INJUSDT", "WLDUSDT"
+        # Layer 1 / Layer 2 (Alta volatilidad, buen volumen)
+        "SOLUSDT", "AVAXUSDT", "NEARUSDT", "APTUSDT", "SUIUSDT",
+        "SEIUSDT", "ARBUSDT", "OPUSDT", "INJUSDT", "FTMUSDT",
+
+        # DeFi (Alto potencial de pumps por noticias)
+        "UNIUSDT", "AAVEUSDT", "MKRUSDT", "LDOUSDT", "RUNEUSDT",
+        "CRVUSDT", "GMXUSDT", "DYDXUSDT",
+
+        # Gaming / Metaverse (Muy volátiles, eventos frecuentes)
+        "SANDUSDT", "MANAUSDT", "AXSUSDT", "IMXUSDT", "GALAUSDT",
+
+        # AI / Compute (Tendencia 2024-2025, alta volatilidad)
+        "FETUSDT", "AGIXUSDT", "WLDUSDT", "RENDERUSDT",
+
+        # Memecoins (Alto volumen y volatilidad extrema)
+        "DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "FLOKIUSDT", "BONKUSDT",
+
+        # Otros altcoins sólidos (volatilidad media-alta)
+        "DOTUSDT", "ATOMUSDT", "ADAUSDT", "MATICUSDT", "LINKUSDT",
+        "ICPUSDT", "FILUSDT", "HBARUSDT", "VETUSDT", "ALGOUSDT"
     ]
 
     # ============================================
