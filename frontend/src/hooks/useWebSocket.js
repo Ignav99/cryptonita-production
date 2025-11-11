@@ -1,6 +1,23 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/api/ws';
+// Auto-detect WebSocket URL based on environment
+const getWsUrl = () => {
+  // If VITE_WS_URL is set, use it
+  if (import.meta.env.VITE_WS_URL) {
+    return import.meta.env.VITE_WS_URL;
+  }
+
+  // If in production (not localhost), use same origin with wss://
+  if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}/api/ws`;
+  }
+
+  // Default to localhost for development
+  return 'ws://localhost:8000/api/ws';
+};
+
+const WS_URL = getWsUrl();
 
 export const useWebSocket = (endpoint = '/dashboard') => {
   const [data, setData] = useState(null);
