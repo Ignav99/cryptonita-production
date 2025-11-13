@@ -116,11 +116,12 @@ class BotManager:
             }
 
         try:
-            # Start bot process in background
+            # Start bot process in background with logs visible
+            # stdout=None and stderr=None redirect to parent process logs (visible in Render)
             process = subprocess.Popen(
                 ["python3", str(self.bot_script)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=None,  # Inherit parent's stdout (visible in Render logs)
+                stderr=None,  # Inherit parent's stderr (visible in Render logs)
                 start_new_session=True,  # Detach from parent
                 cwd=str(self.bot_script.parent.parent)
             )
@@ -130,6 +131,19 @@ class BotManager:
 
             logger.success(f"✅ Bot started with PID {process.pid}")
 
+            # Wait a moment to see if process crashes immediately
+            import time
+            time.sleep(2)
+
+            # Check if still alive
+            if not psutil.pid_exists(process.pid):
+                logger.error(f"❌ Bot process {process.pid} died immediately after start")
+                return {
+                    "success": False,
+                    "message": "Bot process crashed immediately after start. Check logs for errors.",
+                    "pid": None
+                }
+
             return {
                 "success": True,
                 "message": f"Bot started successfully in {mode} mode",
@@ -138,6 +152,8 @@ class BotManager:
 
         except Exception as e:
             logger.error(f"❌ Failed to start bot: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return {
                 "success": False,
                 "message": f"Failed to start bot: {str(e)}",
