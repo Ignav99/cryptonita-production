@@ -75,12 +75,24 @@ class TradingBot:
     def _load_config(self, config_path: str) -> dict:
         """Load bot configuration"""
         try:
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-            logger.info(f"📄 Bot config loaded from {config_path}")
-            return config
-        except FileNotFoundError:
-            logger.warning(f"⚠️ Config file not found: {config_path}, using defaults")
+            # Try relative path first
+            config_file = Path(config_path)
+
+            # If not found, try from project root
+            if not config_file.exists():
+                project_root = Path(__file__).parent.parent.parent
+                config_file = project_root / config_path
+
+            if config_file.exists():
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                logger.info(f"📄 Bot config loaded from {config_file}")
+                return config
+            else:
+                logger.warning(f"⚠️ Config file not found: {config_path}, using defaults")
+                return self._default_config()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load config: {e}, using defaults")
             return self._default_config()
 
     def _load_production_config(self) -> dict:
@@ -514,8 +526,8 @@ class TradingBot:
                     df = self.binance_data.get_historical_klines(ticker, '1d', 250)
                     btc_data = self.binance_data.get_historical_klines('BTCUSDT', '1d', 250)
 
-                    # Get macro data
-                    macro_data = self.macro_fetcher.get_all_macro_data_sync()
+                    # Get macro data (await since we're in async function)
+                    macro_data = await self.macro_fetcher.get_all_macro_data()
 
                     # Calculate current features
                     from src.data.features import FeatureEngineer
@@ -681,49 +693,52 @@ class TradingBot:
         try:
             logger.info("🔄 Syncing positions with Binance...")
 
-            # Get all positions from Binance
-            binance_positions = self.binance.get_all_positions()
+            # Get positions that the bot has opened (from DB)
+            db_positions = self.db.get_positions()
 
-            if not binance_positions:
-                logger.warning("⚠️ No positions found on Binance")
+            if len(db_positions) == 0:
+                logger.info("📊 No bot positions to sync")
                 return
 
-            # Update each position in database
-            for pos in binance_positions:
-                ticker = pos['symbol']
-                quantity = pos['quantity']
-                current_price = pos['current_price']
-
-                # Try to find entry price from trades history
-                recent_trades = self.db.get_recent_trades(limit=100)
-                avg_buy_price = current_price  # Default to current price
-
-                # Find the last BUY trade for this ticker
-                for _, trade in recent_trades.iterrows():
-                    if trade['ticker'] == ticker and trade['action'] == 'BUY':
-                        avg_buy_price = float(trade['price'])
-                        break
-
-                # Update position in database
-                self.db.upsert_position(
-                    ticker=ticker,
-                    quantity=quantity,
-                    avg_buy_price=avg_buy_price,
-                    current_price=current_price
-                )
-
-                logger.debug(f"  ✅ Synced {ticker}: {quantity:.4f} @ ${current_price:.4f}")
-
-            # Remove positions from DB that don't exist on Binance
-            db_positions = self.db.get_positions()
-            binance_tickers = {pos['symbol'] for pos in binance_positions}
-
+            # Update each position with current price from Binance
             for _, db_pos in db_positions.iterrows():
-                if db_pos['ticker'] not in binance_tickers:
-                    self.db.delete_position(db_pos['ticker'])
-                    logger.info(f"  🗑️ Removed closed position: {db_pos['ticker']}")
+                ticker = db_pos['ticker']
 
-            logger.success(f"✅ Synced {len(binance_positions)} positions with Binance")
+                try:
+                    # Get current price from Binance
+                    current_price = self.binance.get_current_price(ticker)
+                    if current_price is None:
+                        logger.warning(f"⚠️ Could not get price for {ticker}")
+                        continue
+
+                    # Get actual balance from Binance to verify position still exists
+                    asset = ticker.replace('USDT', '')
+                    balances = self.binance.get_account_balance()
+
+                    if asset not in balances or balances[asset]['total'] < 0.0001:
+                        # Position was closed outside the bot
+                        self.db.delete_position(ticker)
+                        logger.info(f"🗑️ Removed closed position: {ticker}")
+                        continue
+
+                    # Get actual quantity from Binance
+                    actual_quantity = balances[asset]['total']
+
+                    # Update position with current data
+                    self.db.upsert_position(
+                        ticker=ticker,
+                        quantity=actual_quantity,
+                        avg_buy_price=float(db_pos['avg_buy_price']),
+                        current_price=current_price
+                    )
+
+                    logger.debug(f"  ✅ Synced {ticker}: {actual_quantity:.4f} @ ${current_price:.4f}")
+
+                except Exception as e:
+                    logger.error(f"❌ Failed to sync {ticker}: {e}")
+                    continue
+
+            logger.success(f"✅ Synced {len(db_positions)} bot positions with Binance")
 
         except Exception as e:
             logger.error(f"❌ Failed to sync with Binance: {e}")

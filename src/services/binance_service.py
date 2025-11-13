@@ -522,9 +522,12 @@ class BinanceService:
 
             positions = []
 
+            # Valid crypto assets (exclude fiat and stablecoins that don't have USDT pairs)
+            SKIP_ASSETS = {'USDT', 'TRY', 'ZAR', 'UAH', 'BRL', 'DAI', 'EUR', 'GBP', 'AUD', 'NGN', 'RUB', 'PLN', 'ARS', 'BIDR', 'TUSD', 'USDC', 'BUSD', 'UST'}
+
             for asset, balance_info in balances.items():
-                # Skip USDT (it's our quote currency)
-                if asset == 'USDT':
+                # Skip USDT and fiat currencies
+                if asset in SKIP_ASSETS:
                     continue
 
                 # Skip if balance is negligible
@@ -550,7 +553,8 @@ class BinanceService:
                         'total_value_usdt': total_value
                     })
                 except Exception as e:
-                    logger.debug(f"Could not get price for {symbol}: {e}")
+                    # Silently skip assets that don't have valid pairs
+                    logger.debug(f"Skipping {symbol}: {e}")
                     continue
 
             logger.info(f"📊 Found {len(positions)} open positions")

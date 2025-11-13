@@ -121,16 +121,33 @@ async def get_performance_metrics(
 @router.get("/portfolio-value", response_model=Dict)
 async def get_portfolio_value(current_user: dict = Depends(get_current_user)):
     """
-    Get total portfolio value from Binance account
+    Get total portfolio value for bot-opened positions
 
     Returns portfolio breakdown:
-    - usdt_balance: Available USDT
-    - positions_value: Total value of open positions in USDT
-    - total_value: Total portfolio value
-    - positions_count: Number of open positions
+    - usdt_balance: Available USDT in Binance account
+    - positions_value: Total value of bot-opened positions
+    - total_value: USDT + positions value
+    - positions_count: Number of bot positions
     """
     try:
-        portfolio = binance.get_total_portfolio_value()
-        return portfolio
+        # Get USDT balance from Binance
+        usdt_balance = binance.get_usdt_balance()
+
+        # Get bot positions from database
+        positions_df = db.get_positions()
+
+        # Calculate total value of bot positions
+        positions_value = 0.0
+        if len(positions_df) > 0:
+            positions_value = positions_df['total_value'].sum()
+
+        total_value = usdt_balance + positions_value
+
+        return {
+            'usdt_balance': round(usdt_balance, 2),
+            'positions_value': round(positions_value, 2),
+            'total_value': round(total_value, 2),
+            'positions_count': len(positions_df)
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch portfolio value: {str(e)}")
