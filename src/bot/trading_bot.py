@@ -75,12 +75,24 @@ class TradingBot:
     def _load_config(self, config_path: str) -> dict:
         """Load bot configuration"""
         try:
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-            logger.info(f"📄 Bot config loaded from {config_path}")
-            return config
-        except FileNotFoundError:
-            logger.warning(f"⚠️ Config file not found: {config_path}, using defaults")
+            # Try relative path first
+            config_file = Path(config_path)
+
+            # If not found, try from project root
+            if not config_file.exists():
+                project_root = Path(__file__).parent.parent.parent
+                config_file = project_root / config_path
+
+            if config_file.exists():
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                logger.info(f"📄 Bot config loaded from {config_file}")
+                return config
+            else:
+                logger.warning(f"⚠️ Config file not found: {config_path}, using defaults")
+                return self._default_config()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load config: {e}, using defaults")
             return self._default_config()
 
     def _load_production_config(self) -> dict:
