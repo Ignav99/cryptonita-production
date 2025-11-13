@@ -387,6 +387,98 @@ class DatabaseManager:
             return result.iloc[0].to_dict()
         return None
 
+    def upsert_position(
+        self,
+        ticker: str,
+        quantity: float,
+        avg_buy_price: float,
+        current_price: float
+    ) -> bool:
+        """
+        Insert or update a position
+
+        Args:
+            ticker: Crypto ticker
+            quantity: Position quantity
+            avg_buy_price: Average buy price
+            current_price: Current market price
+
+        Returns:
+            True if successful
+        """
+        try:
+            total_value = quantity * current_price
+            pnl = (current_price - avg_buy_price) * quantity
+            pnl_percentage = ((current_price - avg_buy_price) / avg_buy_price) * 100 if avg_buy_price > 0 else 0
+
+            # Check if position exists
+            existing = self.get_position(ticker)
+
+            if existing:
+                # Update existing position
+                query = """
+                UPDATE positions
+                SET quantity = :quantity,
+                    avg_buy_price = :avg_buy_price,
+                    current_price = :current_price,
+                    total_value = :total_value,
+                    pnl = :pnl,
+                    pnl_percentage = :pnl_percentage,
+                    last_update = :last_update
+                WHERE ticker = :ticker
+                """
+            else:
+                # Insert new position
+                query = """
+                INSERT INTO positions (ticker, quantity, avg_buy_price, current_price, total_value, pnl, pnl_percentage, last_update)
+                VALUES (:ticker, :quantity, :avg_buy_price, :current_price, :total_value, :pnl, :pnl_percentage, :last_update)
+                """
+
+            params = {
+                'ticker': ticker,
+                'quantity': quantity,
+                'avg_buy_price': avg_buy_price,
+                'current_price': current_price,
+                'total_value': total_value,
+                'pnl': pnl,
+                'pnl_percentage': pnl_percentage,
+                'last_update': datetime.utcnow()
+            }
+
+            with self.engine.connect() as conn:
+                conn.execute(text(query), params)
+                conn.commit()
+
+            logger.debug(f"✅ Position upserted: {ticker}")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to upsert position {ticker}: {e}")
+            return False
+
+    def delete_position(self, ticker: str) -> bool:
+        """
+        Delete a position
+
+        Args:
+            ticker: Crypto ticker
+
+        Returns:
+            True if successful
+        """
+        try:
+            query = "DELETE FROM positions WHERE ticker = :ticker"
+            with self.engine.connect() as conn:
+                conn.execute(text(query), {'ticker': ticker})
+                conn.commit()
+
+            logger.debug(f"✅ Position deleted: {ticker}")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to delete position {ticker}: {e}")
+            return False
+
     # ============================================
     # PERFORMANCE METRICS
     # ============================================

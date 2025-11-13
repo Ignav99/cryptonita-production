@@ -2,7 +2,7 @@
 Dashboard Routes
 """
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+from typing import List, Dict
 from datetime import datetime, timedelta
 
 from config import settings
@@ -11,11 +11,15 @@ from src.api.schemas.dashboard import (
     DashboardStats, Position, Signal, Trade, BotStatus, PerformanceMetric
 )
 from src.data.storage.db_manager import DatabaseManager
+from src.services.binance_service import BinanceService
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 # Database instance
 db = DatabaseManager(settings.get_database_url())
+
+# Binance service instance
+binance = BinanceService()
 
 
 @router.get("/stats", response_model=DashboardStats)
@@ -112,3 +116,21 @@ async def get_performance_metrics(
         return [PerformanceMetric(**metric) for metric in metrics]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/portfolio-value", response_model=Dict)
+async def get_portfolio_value(current_user: dict = Depends(get_current_user)):
+    """
+    Get total portfolio value from Binance account
+
+    Returns portfolio breakdown:
+    - usdt_balance: Available USDT
+    - positions_value: Total value of open positions in USDT
+    - total_value: Total portfolio value
+    - positions_count: Number of open positions
+    """
+    try:
+        portfolio = binance.get_total_portfolio_value()
+        return portfolio
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch portfolio value: {str(e)}")

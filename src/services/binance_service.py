@@ -476,6 +476,123 @@ class BinanceService:
             logger.error(f"❌ Failed to round quantity: {e}")
             return quantity
 
+    def round_price(self, symbol: str, price: float) -> float:
+        """
+        Round price according to symbol's tick size
+
+        Args:
+            symbol: Trading pair
+            price: Raw price
+
+        Returns:
+            Rounded price
+        """
+        try:
+            info = self.get_symbol_info(symbol)
+            if not info:
+                return round(price, 2)  # Default to 2 decimals
+
+            # Get PRICE_FILTER
+            for filter in info['filters']:
+                if filter['filterType'] == 'PRICE_FILTER':
+                    tick_size = float(filter['tickSize'])
+
+                    # Round to tick size
+                    precision = len(str(tick_size).rstrip('0').split('.')[-1])
+                    rounded = round(price - (price % tick_size), precision)
+
+                    return rounded
+
+            return round(price, 2)  # Default fallback
+
+        except Exception as e:
+            logger.error(f"❌ Failed to round price: {e}")
+            return round(price, 2)
+
+    def get_all_positions(self) -> List[Dict]:
+        """
+        Get all current positions (non-zero balances) with current prices
+
+        Returns:
+            List of position dicts with balance and value info
+        """
+        try:
+            # Get all balances
+            balances = self.get_account_balance()
+
+            positions = []
+
+            for asset, balance_info in balances.items():
+                # Skip USDT (it's our quote currency)
+                if asset == 'USDT':
+                    continue
+
+                # Skip if balance is negligible
+                if balance_info['total'] < 0.0001:
+                    continue
+
+                # Get current price in USDT
+                symbol = f"{asset}USDT"
+                try:
+                    current_price = self.get_current_price(symbol)
+                    if current_price is None:
+                        continue
+
+                    total_value = balance_info['total'] * current_price
+
+                    positions.append({
+                        'asset': asset,
+                        'symbol': symbol,
+                        'quantity': balance_info['total'],
+                        'free': balance_info['free'],
+                        'locked': balance_info['locked'],
+                        'current_price': current_price,
+                        'total_value_usdt': total_value
+                    })
+                except Exception as e:
+                    logger.debug(f"Could not get price for {symbol}: {e}")
+                    continue
+
+            logger.info(f"📊 Found {len(positions)} open positions")
+            return positions
+
+        except Exception as e:
+            logger.error(f"❌ Failed to get positions: {e}")
+            return []
+
+    def get_total_portfolio_value(self) -> Dict[str, float]:
+        """
+        Get total portfolio value in USDT
+
+        Returns:
+            Dict with usdt_balance, positions_value, total_value
+        """
+        try:
+            # Get USDT balance
+            usdt_balance = self.get_usdt_balance()
+
+            # Get all positions value
+            positions = self.get_all_positions()
+            positions_value = sum(pos['total_value_usdt'] for pos in positions)
+
+            total_value = usdt_balance + positions_value
+
+            return {
+                'usdt_balance': usdt_balance,
+                'positions_value': positions_value,
+                'total_value': total_value,
+                'positions_count': len(positions)
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Failed to get portfolio value: {e}")
+            return {
+                'usdt_balance': 0.0,
+                'positions_value': 0.0,
+                'total_value': 0.0,
+                'positions_count': 0
+            }
+
     def test_connectivity(self) -> bool:
         """
         Test Binance API connectivity
