@@ -150,7 +150,8 @@ class TradingBot:
         # Start background tasks
         tasks = [
             asyncio.create_task(self._market_scan_loop()),
-            asyncio.create_task(self._position_monitoring_loop())
+            asyncio.create_task(self._position_monitoring_loop()),
+            asyncio.create_task(self._binance_sync_loop())
         ]
 
         logger.success("✅ Trading bot started successfully")
@@ -399,12 +400,17 @@ class TradingBot:
         oco_quantity = executed_qty * tp_sl['tp1_size']
         oco_quantity = self.binance.round_quantity(ticker, oco_quantity)
 
+        # Round prices to avoid Binance precision errors
+        tp_price = self.binance.round_price(ticker, tp_sl['tp1'])
+        sl_price = self.binance.round_price(ticker, tp_sl['stop_loss'])
+        sl_limit_price = self.binance.round_price(ticker, tp_sl['stop_loss'] * 0.99)
+
         oco_order = self.binance.create_oco_order(
             symbol=ticker,
             quantity=oco_quantity,
-            price=tp_sl['tp1'],
-            stop_price=tp_sl['stop_loss'],
-            stop_limit_price=tp_sl['stop_loss'] * 0.99  # Slightly below stop
+            price=tp_price,
+            stop_price=sl_price,
+            stop_limit_price=sl_limit_price
         )
 
         if oco_order:
@@ -427,6 +433,14 @@ class TradingBot:
             price=executed_price,
             total_value=executed_value,
             status='executed'
+        )
+
+        # Update positions table in database
+        self.db.upsert_position(
+            ticker=ticker,
+            quantity=executed_qty,
+            avg_buy_price=executed_price,
+            current_price=executed_price
         )
 
         # 10. Update position tracking with dynamic TP/SL data
@@ -642,6 +656,77 @@ class TradingBot:
 
         except Exception as e:
             logger.error(f"❌ Exit failed for {ticker}: {e}")
+
+    # ============================================
+    # BINANCE SYNC (every 30 minutes)
+    # ============================================
+
+    async def _binance_sync_loop(self):
+        """Sync positions with Binance every 30 minutes"""
+        logger.info("🔄 Binance sync started (interval: 30min)")
+
+        while self.is_running:
+            try:
+                await self._sync_positions_with_binance()
+
+                # Wait for next sync interval (30 minutes)
+                await asyncio.sleep(30 * 60)
+
+            except Exception as e:
+                logger.error(f"❌ Error in Binance sync: {e}")
+                await asyncio.sleep(60)
+
+    async def _sync_positions_with_binance(self):
+        """Fetch real positions from Binance and update database"""
+        try:
+            logger.info("🔄 Syncing positions with Binance...")
+
+            # Get all positions from Binance
+            binance_positions = self.binance.get_all_positions()
+
+            if not binance_positions:
+                logger.warning("⚠️ No positions found on Binance")
+                return
+
+            # Update each position in database
+            for pos in binance_positions:
+                ticker = pos['symbol']
+                quantity = pos['quantity']
+                current_price = pos['current_price']
+
+                # Try to find entry price from trades history
+                recent_trades = self.db.get_recent_trades(limit=100)
+                avg_buy_price = current_price  # Default to current price
+
+                # Find the last BUY trade for this ticker
+                for _, trade in recent_trades.iterrows():
+                    if trade['ticker'] == ticker and trade['action'] == 'BUY':
+                        avg_buy_price = float(trade['price'])
+                        break
+
+                # Update position in database
+                self.db.upsert_position(
+                    ticker=ticker,
+                    quantity=quantity,
+                    avg_buy_price=avg_buy_price,
+                    current_price=current_price
+                )
+
+                logger.debug(f"  ✅ Synced {ticker}: {quantity:.4f} @ ${current_price:.4f}")
+
+            # Remove positions from DB that don't exist on Binance
+            db_positions = self.db.get_positions()
+            binance_tickers = {pos['symbol'] for pos in binance_positions}
+
+            for _, db_pos in db_positions.iterrows():
+                if db_pos['ticker'] not in binance_tickers:
+                    self.db.delete_position(db_pos['ticker'])
+                    logger.info(f"  🗑️ Removed closed position: {db_pos['ticker']}")
+
+            logger.success(f"✅ Synced {len(binance_positions)} positions with Binance")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to sync with Binance: {e}")
 
     # ============================================
     # UTILITIES
