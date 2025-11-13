@@ -700,7 +700,12 @@ class TradingBot:
                 logger.info("📊 No bot positions to sync")
                 return
 
+            # Get all balances from Binance ONCE (not inside loop!)
+            logger.debug("📊 Fetching account balances from Binance...")
+            balances = self.binance.get_account_balance()
+
             # Update each position with current price from Binance
+            synced_count = 0
             for _, db_pos in db_positions.iterrows():
                 ticker = db_pos['ticker']
 
@@ -711,9 +716,8 @@ class TradingBot:
                         logger.warning(f"⚠️ Could not get price for {ticker}")
                         continue
 
-                    # Get actual balance from Binance to verify position still exists
+                    # Check if position still exists in Binance balances
                     asset = ticker.replace('USDT', '')
-                    balances = self.binance.get_account_balance()
 
                     if asset not in balances or balances[asset]['total'] < 0.0001:
                         # Position was closed outside the bot
@@ -733,12 +737,13 @@ class TradingBot:
                     )
 
                     logger.debug(f"  ✅ Synced {ticker}: {actual_quantity:.4f} @ ${current_price:.4f}")
+                    synced_count += 1
 
                 except Exception as e:
                     logger.error(f"❌ Failed to sync {ticker}: {e}")
                     continue
 
-            logger.success(f"✅ Synced {len(db_positions)} bot positions with Binance")
+            logger.success(f"✅ Synced {synced_count} bot positions with Binance")
 
         except Exception as e:
             logger.error(f"❌ Failed to sync with Binance: {e}")
