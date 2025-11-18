@@ -25,7 +25,7 @@
     "use_trailing_stop": false
   },
   "model": {
-    "threshold": 0.60,
+    "threshold": 0.95,
     "model_file": "PRODUCTION_SYSTEM/models/production_model_v3.json",
     "features_config": "PRODUCTION_SYSTEM/configs/production_features_config_v3.json",
     "features_count": 42,

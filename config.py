@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     REQUIRE_MANUAL_APPROVAL: bool = Field(default=True, env="REQUIRE_MANUAL_APPROVAL")
 
     # Model thresholds from V3 config
-    PREDICTION_THRESHOLD: float = 0.60  # V3 optimized threshold
+    PREDICTION_THRESHOLD: float = 0.95  # 95% confidence threshold (conservative trading)
     POSITION_SIZE_PCT: float = 0.10  # 10% of capital per position
     MAX_POSITION_SIZE_PCT: float = 0.15  # Max 15% per position
     TAKE_PROFIT_PCT: float = 0.15  # 15% take profit

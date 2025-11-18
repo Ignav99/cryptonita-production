@@ -25,10 +25,17 @@ binance = BinanceService()
 @router.get("/stats", response_model=DashboardStats)
 async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     """
-    Get overall dashboard statistics
+    Get overall dashboard statistics with USDT balance
     """
     try:
-        stats = db.get_dashboard_stats()
+        # Get USDT balance from Binance
+        usdt_balance = binance.get_usdt_balance()
+
+        # Get stats with USDT balance
+        stats = db.get_dashboard_stats(
+            usdt_balance=usdt_balance,
+            initial_capital=settings.INITIAL_CAPITAL
+        )
         return DashboardStats(**stats)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -37,12 +44,30 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
 @router.get("/positions", response_model=List[Position])
 async def get_positions(current_user: dict = Depends(get_current_user)):
     """
-    Get all current positions
+    Get all current open positions
     """
     try:
         positions_df = db.get_positions()
         positions = positions_df.to_dict('records')
         return [Position(**pos) for pos in positions]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/closed-positions", response_model=List[Dict])
+async def get_closed_positions(
+    limit: int = 50,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get closed positions (matched BUY/SELL pairs) with P&L info
+    """
+    try:
+        closed_df = db.get_closed_positions(limit=limit)
+        if len(closed_df) == 0:
+            return []
+        closed_positions = closed_df.to_dict('records')
+        return closed_positions
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
