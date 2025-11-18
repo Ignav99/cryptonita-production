@@ -79,6 +79,11 @@ export const dashboard = {
     return response.data;
   },
 
+  getClosedPositions: async (limit = 50) => {
+    const response = await apiClient.get(`/dashboard/closed-positions?limit=${limit}`);
+    return response.data;
+  },
+
   getSignals: async (limit = 50) => {
     const response = await apiClient.get(`/dashboard/signals?limit=${limit}`);
     return response.data;

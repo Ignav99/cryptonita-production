@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowUpCircle, ArrowDownCircle } from 'lucide-react';
+import { ArrowUpCircle, ArrowDownCircle, Target } from 'lucide-react';
 import { format } from 'date-fns';
 
 const Trades = ({ trades, limit = 20 }) => {
@@ -34,6 +34,7 @@ const Trades = ({ trades, limit = 20 }) => {
               <th>Quantity</th>
               <th>Price</th>
               <th>Total</th>
+              <th>Model Conf.</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -75,6 +76,30 @@ const Trades = ({ trades, limit = 20 }) => {
 
                   <td className="font-mono text-sm font-semibold">
                     ${trade.total_value?.toFixed(2)}
+                  </td>
+
+                  {/* Model Confidence Column */}
+                  <td>
+                    {trade.probability ? (
+                      <div className="flex items-center gap-1">
+                        <Target className="w-3 h-3 text-blue-600" />
+                        <span
+                          className={`text-xs font-semibold px-2 py-1 rounded-full ${
+                            trade.probability >= 0.95
+                              ? 'bg-green-100 text-green-800'
+                              : trade.probability >= 0.80
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-yellow-100 text-yellow-800'
+                          }`}
+                        >
+                          {(trade.probability * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-gray-400">
+                        {isBuy ? 'N/A' : '-'}
+                      </span>
+                    )}
                   </td>
 
                   <td>
