@@ -235,14 +235,30 @@ class DatabaseManager:
             logger.error(f"❌ Failed to save signal: {e}")
             raise
 
-    def get_recent_signals(self, limit: int = 50) -> pd.DataFrame:
-        """Get recent signals"""
+    def get_recent_signals(self, limit: int = 50, min_probability: float = 0.60, days: int = 7) -> pd.DataFrame:
+        """
+        Get recent signals filtered by probability and time
+
+        Args:
+            limit: Maximum number of signals to return
+            min_probability: Minimum probability threshold (default 60%)
+            days: Number of days to look back (default 7)
+
+        Returns:
+            DataFrame with filtered signals
+        """
         query = """
         SELECT * FROM signals
-        ORDER BY timestamp DESC
+        WHERE probability >= :min_probability
+          AND timestamp >= NOW() - INTERVAL ':days days'
+        ORDER BY probability DESC, timestamp DESC
         LIMIT :limit
         """
-        return self.execute_query(query, {'limit': limit})
+        return self.execute_query(query, {
+            'limit': limit,
+            'min_probability': min_probability,
+            'days': days
+        })
 
     # ============================================
     # TRADES
@@ -256,7 +272,8 @@ class DatabaseManager:
         quantity: float,
         price: float,
         total_value: float,
-        status: str = 'pending'
+        status: str = 'pending',
+        probability: Optional[float] = None
     ) -> int:
         """
         Save a trade execution
@@ -269,13 +286,14 @@ class DatabaseManager:
             price: Execution price
             total_value: Total USD value
             status: pending, executed, failed, or cancelled
+            probability: Model confidence when trade was executed
 
         Returns:
             Trade ID
         """
         query = """
-        INSERT INTO trades (signal_id, ticker, action, quantity, price, total_value, status, timestamp)
-        VALUES (:signal_id, :ticker, :action, :quantity, :price, :total_value, :status, :timestamp)
+        INSERT INTO trades (signal_id, ticker, action, quantity, price, total_value, status, probability, timestamp)
+        VALUES (:signal_id, :ticker, :action, :quantity, :price, :total_value, :status, :probability, :timestamp)
         RETURNING id
         """
         params = {
@@ -286,6 +304,7 @@ class DatabaseManager:
             'price': price,
             'total_value': total_value,
             'status': status,
+            'probability': probability,
             'timestamp': datetime.utcnow()
         }
 
@@ -301,13 +320,64 @@ class DatabaseManager:
             raise
 
     def get_recent_trades(self, limit: int = 50) -> pd.DataFrame:
-        """Get recent trades"""
+        """Get recent trades with probability"""
         query = """
-        SELECT t.*, s.probability
-        FROM trades t
-        LEFT JOIN signals s ON t.signal_id = s.id
-        ORDER BY t.timestamp DESC
+        SELECT *
+        FROM trades
+        ORDER BY timestamp DESC
         LIMIT :limit
+        """
+        return self.execute_query(query, {'limit': limit})
+
+    def get_closed_positions(self, limit: int = 50) -> pd.DataFrame:
+        """
+        Get closed positions (matched BUY/SELL pairs) with P&L
+
+        Returns DataFrame with:
+        - ticker, entry_price, exit_price, quantity
+        - entry_time, exit_time
+        - pnl, pnl_percentage
+        - probability (model confidence at entry)
+        """
+        query = """
+        WITH buy_trades AS (
+            SELECT
+                id,
+                ticker,
+                price as entry_price,
+                quantity,
+                timestamp as entry_time,
+                probability
+            FROM trades
+            WHERE action = 'BUY' AND status = 'executed'
+        ),
+        sell_trades AS (
+            SELECT
+                ticker,
+                price as exit_price,
+                quantity as sell_quantity,
+                timestamp as exit_time,
+                ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+            FROM trades
+            WHERE action = 'SELL' AND status = 'executed'
+        ),
+        matched_trades AS (
+            SELECT
+                b.ticker,
+                b.entry_price,
+                s.exit_price,
+                LEAST(b.quantity, s.sell_quantity) as quantity,
+                b.entry_time,
+                s.exit_time,
+                b.probability,
+                (s.exit_price - b.entry_price) * LEAST(b.quantity, s.sell_quantity) as pnl,
+                ((s.exit_price - b.entry_price) / b.entry_price) * 100 as pnl_percentage
+            FROM buy_trades b
+            INNER JOIN sell_trades s ON b.ticker = s.ticker
+            ORDER BY s.exit_time DESC
+            LIMIT :limit
+        )
+        SELECT * FROM matched_trades
         """
         return self.execute_query(query, {'limit': limit})
 
@@ -531,9 +601,13 @@ class DatabaseManager:
     # STATISTICS
     # ============================================
 
-    def get_dashboard_stats(self) -> Dict[str, Any]:
+    def get_dashboard_stats(self, usdt_balance: float = 0.0, initial_capital: float = 10000.0) -> Dict[str, Any]:
         """
         Get aggregated statistics for dashboard
+
+        Args:
+            usdt_balance: Current available USDT balance from Binance
+            initial_capital: Initial capital to calculate total P&L percentage
 
         Returns:
             Dictionary with dashboard stats
@@ -551,21 +625,52 @@ class DatabaseManager:
             positions_query = "SELECT COUNT(*) as count FROM positions"
             active_positions = self.execute_query(positions_query).iloc[0]['count']
 
-            # Total portfolio value
-            portfolio_query = "SELECT COALESCE(SUM(total_value), 0) as total FROM positions"
-            portfolio_result = self.execute_query(portfolio_query).iloc[0]['total']
-            portfolio_value = float(portfolio_result) if portfolio_result is not None else 0.0
+            # Total value of open positions
+            positions_value_query = "SELECT COALESCE(SUM(total_value), 0) as total FROM positions"
+            positions_result = self.execute_query(positions_value_query).iloc[0]['total']
+            positions_value = float(positions_result) if positions_result is not None else 0.0
 
-            # Total P&L
-            pnl_query = "SELECT COALESCE(SUM(pnl), 0) as total FROM positions"
-            pnl_result = self.execute_query(pnl_query).iloc[0]['total']
-            total_pnl = float(pnl_result) if pnl_result is not None else 0.0
+            # Total portfolio value (USDT balance + positions value)
+            portfolio_value = usdt_balance + positions_value
 
-            # Win rate (from executed trades)
+            # Total P&L from open positions
+            open_pnl_query = "SELECT COALESCE(SUM(pnl), 0) as total FROM positions"
+            open_pnl_result = self.execute_query(open_pnl_query).iloc[0]['total']
+            open_pnl = float(open_pnl_result) if open_pnl_result is not None else 0.0
+
+            # Realized P&L from closed positions
+            closed_pnl_query = """
+            SELECT COALESCE(SUM(
+                (s.price - b.price) * LEAST(b.quantity, s.quantity)
+            ), 0) as realized_pnl
+            FROM trades b
+            INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
+            WHERE b.action = 'BUY' AND b.status = 'executed'
+              AND s.action = 'SELL' AND s.status = 'executed'
+            """
+            realized_pnl_result = self.execute_query(closed_pnl_query).iloc[0]['realized_pnl']
+            realized_pnl = float(realized_pnl_result) if realized_pnl_result is not None else 0.0
+
+            # Total P&L (realized + unrealized)
+            total_pnl = realized_pnl + open_pnl
+
+            # Total P&L percentage (based on initial capital)
+            total_pnl_pct = (total_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
+
+            # Win rate (ONLY from closed positions)
             win_rate_query = """
+            WITH closed_trades AS (
+                SELECT
+                    b.ticker,
+                    (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl
+                FROM trades b
+                INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
+                WHERE b.action = 'BUY' AND b.status = 'executed'
+                  AND s.action = 'SELL' AND s.status = 'executed'
+            )
             SELECT
                 COUNT(CASE WHEN pnl > 0 THEN 1 END)::float / NULLIF(COUNT(*), 0) as win_rate
-            FROM positions
+            FROM closed_trades
             """
             win_rate_result = self.execute_query(win_rate_query)
             if len(win_rate_result) > 0 and win_rate_result.iloc[0]['win_rate'] is not None:
@@ -573,23 +678,59 @@ class DatabaseManager:
             else:
                 win_rate = 0.0
 
+            # Today's stats
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Today's P&L (from closed trades today)
+            today_pnl_query = """
+            SELECT COALESCE(SUM(
+                (s.price - b.price) * LEAST(b.quantity, s.quantity)
+            ), 0) as today_pnl
+            FROM trades b
+            INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
+            WHERE b.action = 'BUY' AND b.status = 'executed'
+              AND s.action = 'SELL' AND s.status = 'executed'
+              AND s.timestamp >= :today_start
+            """
+            today_pnl_result = self.execute_query(today_pnl_query, {'today_start': today_start}).iloc[0]['today_pnl']
+            today_pnl = float(today_pnl_result) if today_pnl_result is not None else 0.0
+
+            # Today's P&L percentage
+            today_pnl_pct = (today_pnl / portfolio_value * 100) if portfolio_value > 0 else 0.0
+
             return {
                 'total_trades': int(total_trades),
                 'executed_trades': int(executed_trades),
                 'active_positions': int(active_positions),
+                'usdt_balance': round(usdt_balance, 2),
+                'positions_value': round(positions_value, 2),
                 'portfolio_value': round(portfolio_value, 2),
                 'total_pnl': round(total_pnl, 2),
+                'total_pnl_pct': round(total_pnl_pct, 2),
+                'realized_pnl': round(realized_pnl, 2),
+                'unrealized_pnl': round(open_pnl, 2),
                 'win_rate': round(win_rate * 100, 2) if win_rate else 0.0,
+                'today_pnl': round(today_pnl, 2),
+                'today_pnl_pct': round(today_pnl_pct, 2),
                 'timestamp': datetime.utcnow().isoformat()
             }
         except Exception as e:
             logger.error(f"❌ Failed to get dashboard stats: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return {
                 'total_trades': 0,
                 'executed_trades': 0,
                 'active_positions': 0,
-                'portfolio_value': 0.0,
+                'usdt_balance': round(usdt_balance, 2),
+                'positions_value': 0.0,
+                'portfolio_value': round(usdt_balance, 2),
                 'total_pnl': 0.0,
+                'total_pnl_pct': 0.0,
+                'realized_pnl': 0.0,
+                'unrealized_pnl': 0.0,
                 'win_rate': 0.0,
+                'today_pnl': 0.0,
+                'today_pnl_pct': 0.0,
                 'timestamp': datetime.utcnow().isoformat()
             }

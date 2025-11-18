@@ -27,6 +27,7 @@ fi
 echo "📊 Setting up database..."
 python scripts/setup_database.py || echo "⚠️ Database already exists or migration skipped"
 python scripts/migrate_positions_table.py || echo "⚠️ Migration already applied or skipped"
+python scripts/migrate_add_probability_to_trades.py || echo "⚠️ Migration already applied or skipped"
 
 # Clean positions table (remove positions not opened by bot)
 echo "🧹 Cleaning positions table..."
