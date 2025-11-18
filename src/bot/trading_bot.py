@@ -444,7 +444,8 @@ class TradingBot:
             quantity=executed_qty,
             price=executed_price,
             total_value=executed_value,
-            status='executed'
+            status='executed',
+            probability=probability  # Save model confidence
         )
 
         # Update positions table in database
@@ -663,7 +664,8 @@ class TradingBot:
                     quantity=executed_qty,
                     price=executed_price,
                     total_value=executed_price * executed_qty,
-                    status='executed'
+                    status='executed',
+                    probability=None  # SELL trades don't have model probability
                 )
 
         except Exception as e:
