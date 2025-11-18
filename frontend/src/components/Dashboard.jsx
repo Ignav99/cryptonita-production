@@ -5,12 +5,14 @@ import useWebSocket from '../hooks/useWebSocket';
 import Stats from './Stats';
 import BotControls from './BotControls';
 import Positions from './Positions';
+import ClosedPositions from './ClosedPositions';
 import Signals from './Signals';
 import Trades from './Trades';
 
 const Dashboard = () => {
   const [stats, setStats] = useState(null);
   const [positions, setPositions] = useState([]);
+  const [closedPositions, setClosedPositions] = useState([]);
   const [signals, setSignals] = useState([]);
   const [trades, setTrades] = useState([]);
   const [botStatus, setBotStatus] = useState(null);
@@ -23,10 +25,11 @@ const Dashboard = () => {
   // Fetch all data
   const fetchData = async () => {
     try {
-      const [statsData, positionsData, signalsData, tradesData, statusData] =
+      const [statsData, positionsData, closedData, signalsData, tradesData, statusData] =
         await Promise.all([
           dashboard.getStats(),
           dashboard.getPositions(),
+          dashboard.getClosedPositions(50),
           dashboard.getSignals(50),
           dashboard.getTrades(50),
           dashboard.getBotStatus(),
@@ -34,6 +37,7 @@ const Dashboard = () => {
 
       setStats(statsData);
       setPositions(positionsData);
+      setClosedPositions(closedData);
       setSignals(signalsData);
       setTrades(tradesData);
       setBotStatus(statusData);
@@ -154,6 +158,9 @@ const Dashboard = () => {
               <Positions positions={positions} />
             </div>
           </div>
+
+          {/* Closed Positions */}
+          <ClosedPositions closedPositions={closedPositions} />
 
           {/* Signals + Trades */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

@@ -2,7 +2,11 @@ import React from 'react';
 import { TrendingUp, TrendingDown } from 'lucide-react';
 import { formatDistance } from 'date-fns';
 
-const Positions = ({ positions }) => {
+const Positions = ({ positions, limit = 20 }) => {
+  // Apply limit to positions
+  const displayPositions = positions?.slice(0, limit) || [];
+  const hasMore = positions && positions.length > limit;
+
   if (!positions || positions.length === 0) {
     return (
       <div className="card">
@@ -19,7 +23,12 @@ const Positions = ({ positions }) => {
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-bold text-gray-800">Open Positions</h2>
-        <span className="badge badge-info">{positions.length} active</span>
+        <div className="flex items-center gap-2">
+          <span className="badge badge-info">{positions.length} active</span>
+          {hasMore && (
+            <span className="text-xs text-gray-500">Showing {limit} of {positions.length}</span>
+          )}
+        </div>
       </div>
 
       <div className="overflow-x-auto">
@@ -36,7 +45,7 @@ const Positions = ({ positions }) => {
             </tr>
           </thead>
           <tbody>
-            {positions.map((position, index) => {
+            {displayPositions.map((position, index) => {
               const pnl = position.pnl || 0;
               const pnlPct = position.pnl_percentage || 0;
               const isProfit = pnl >= 0;
