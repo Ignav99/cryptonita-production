@@ -71,21 +71,11 @@ def reset_database(initial_capital: float = 10000.0):
         logger.info(f"  📊 Total Invested: ${portfolio['total_invested']:,.2f}")
         logger.info(f"  📈 Realized P&L: ${portfolio['realized_pnl']:,.2f}")
 
-        # Show Binance status (for reference)
-        logger.info("\n💰 Binance Testnet status (for reference):")
-        binance = BinanceService()
-        usdt_balance = binance.get_usdt_balance()
-        logger.info(f"  💵 Binance USDT: ${usdt_balance:,.2f}")
-
-        # Get all open positions
-        positions = binance.get_all_positions()
-        if len(positions) > 0:
-            logger.warning(f"  ⚠️  You still have {len(positions)} open positions in Binance")
-            logger.warning(f"  ⚠️  Close them manually or they will be re-synced")
-            for pos in positions[:5]:  # Show first 5
-                logger.info(f"    - {pos['ticker']}: {pos['quantity']} @ ${pos['current_price']}")
-        else:
-            logger.success("  ✅ No open positions in Binance")
+        # Note: We no longer check Binance balances here because:
+        # 1. Binance testnet has many coins with initial balances (not our positions)
+        # 2. Our portfolio is now managed internally, not from Binance
+        # 3. The bot tracks its own positions in the 'positions' table
+        logger.info("\n💡 Note: Portfolio is now managed internally, not from Binance testnet")
 
         logger.info("=" * 60)
         logger.success("✅ RESET COMPLETE - Ready to start fresh!")
