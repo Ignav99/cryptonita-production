@@ -25,17 +25,24 @@ binance = BinanceService()
 @router.get("/stats", response_model=DashboardStats)
 async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     """
-    Get overall dashboard statistics with USDT balance
+    Get overall dashboard statistics with portfolio balance
     """
     try:
-        # Get USDT balance from Binance
-        usdt_balance = binance.get_usdt_balance()
+        # Get portfolio balance from our managed portfolio (NOT Binance)
+        portfolio = db.get_portfolio()
+        usdt_balance = portfolio['available_balance']
 
-        # Get stats with USDT balance
+        # Get stats with portfolio balance
         stats = db.get_dashboard_stats(
             usdt_balance=usdt_balance,
-            initial_capital=settings.INITIAL_CAPITAL
+            initial_capital=portfolio['initial_capital']
         )
+
+        # Override with accurate portfolio values
+        stats['usdt_balance'] = portfolio['available_balance']
+        stats['positions_value'] = portfolio['total_invested']
+        stats['portfolio_value'] = portfolio['total_value']
+
         return DashboardStats(**stats)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -146,33 +153,68 @@ async def get_performance_metrics(
 @router.get("/portfolio-value", response_model=Dict)
 async def get_portfolio_value(current_user: dict = Depends(get_current_user)):
     """
-    Get total portfolio value for bot-opened positions
+    Get total portfolio value from managed portfolio
 
     Returns portfolio breakdown:
-    - usdt_balance: Available USDT in Binance account
-    - positions_value: Total value of bot-opened positions
+    - usdt_balance: Available USDT to trade
+    - positions_value: Total value invested in positions
     - total_value: USDT + positions value
-    - positions_count: Number of bot positions
+    - positions_count: Number of open positions
+    - initial_capital: Starting capital
+    - realized_pnl: Realized P&L from closed trades
     """
     try:
-        # Get USDT balance from Binance
-        usdt_balance = binance.get_usdt_balance()
+        # Get portfolio from our managed system (NOT Binance)
+        portfolio = db.get_portfolio()
 
-        # Get bot positions from database
+        # Get positions count from database
         positions_df = db.get_positions()
 
-        # Calculate total value of bot positions
-        positions_value = 0.0
-        if len(positions_df) > 0:
-            positions_value = positions_df['total_value'].sum()
-
-        total_value = usdt_balance + positions_value
-
         return {
-            'usdt_balance': round(usdt_balance, 2),
-            'positions_value': round(positions_value, 2),
-            'total_value': round(total_value, 2),
-            'positions_count': len(positions_df)
+            'usdt_balance': round(portfolio['available_balance'], 2),
+            'positions_value': round(portfolio['total_invested'], 2),
+            'total_value': round(portfolio['total_value'], 2),
+            'positions_count': len(positions_df),
+            'initial_capital': round(portfolio['initial_capital'], 2),
+            'realized_pnl': round(portfolio['realized_pnl'], 2)
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch portfolio value: {str(e)}")
+
+
+@router.post("/portfolio/initialize", response_model=Dict)
+async def initialize_portfolio(
+    initial_capital: float = 10000.0,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Initialize or reset portfolio with given capital.
+    WARNING: This will reset all balance tracking!
+
+    Args:
+        initial_capital: Starting capital amount (default: $10,000)
+
+    Returns:
+        New portfolio state
+    """
+    try:
+        if initial_capital <= 0:
+            raise HTTPException(status_code=400, detail="Initial capital must be positive")
+
+        if initial_capital > 1000000:
+            raise HTTPException(status_code=400, detail="Initial capital cannot exceed $1,000,000")
+
+        success = db.initialize_portfolio(initial_capital)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to initialize portfolio")
+
+        portfolio = db.get_portfolio()
+        return {
+            'success': True,
+            'message': f'Portfolio initialized with ${initial_capital:,.2f}',
+            'portfolio': portfolio
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to initialize portfolio: {str(e)}")

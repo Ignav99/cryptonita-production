@@ -5,6 +5,7 @@ WARNING: This will delete ALL trades, signals, and positions!
 """
 
 import sys
+import argparse
 from pathlib import Path
 
 # Add project root to path
@@ -18,8 +19,13 @@ from src.services.binance_service import BinanceService
 from loguru import logger
 
 
-def reset_database():
-    """Reset database - delete all data"""
+def reset_database(initial_capital: float = 10000.0):
+    """
+    Reset database - delete all data and initialize portfolio
+
+    Args:
+        initial_capital: Starting capital for the portfolio
+    """
     try:
         db = DatabaseManager(settings.get_database_url())
 
@@ -51,13 +57,25 @@ def reset_database():
 
             conn.commit()
 
-        logger.success("✅ Database reset completed")
+        logger.success("✅ Database tables cleared")
 
-        # Show remaining balances
-        logger.info("💰 Checking Binance Testnet balance...")
+        # Initialize portfolio with specified capital
+        logger.info(f"💰 Initializing portfolio with ${initial_capital:,.2f}...")
+        db.initialize_portfolio(initial_capital)
+
+        # Verify portfolio
+        portfolio = db.get_portfolio()
+        logger.success(f"✅ Portfolio initialized:")
+        logger.info(f"  💵 Initial Capital: ${portfolio['initial_capital']:,.2f}")
+        logger.info(f"  💵 Available Balance: ${portfolio['available_balance']:,.2f}")
+        logger.info(f"  📊 Total Invested: ${portfolio['total_invested']:,.2f}")
+        logger.info(f"  📈 Realized P&L: ${portfolio['realized_pnl']:,.2f}")
+
+        # Show Binance status (for reference)
+        logger.info("\n💰 Binance Testnet status (for reference):")
         binance = BinanceService()
         usdt_balance = binance.get_usdt_balance()
-        logger.info(f"  💵 Available USDT: ${usdt_balance:,.2f}")
+        logger.info(f"  💵 Binance USDT: ${usdt_balance:,.2f}")
 
         # Get all open positions
         positions = binance.get_all_positions()
@@ -71,6 +89,7 @@ def reset_database():
 
         logger.info("=" * 60)
         logger.success("✅ RESET COMPLETE - Ready to start fresh!")
+        logger.info(f"💰 Starting capital: ${initial_capital:,.2f}")
         logger.info("=" * 60)
 
         return True
@@ -83,6 +102,12 @@ def reset_database():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Reset database and initialize portfolio")
+    parser.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
+    parser.add_argument("--capital", type=float, default=10000.0,
+                        help="Initial capital for portfolio (default: 10000)")
+    args = parser.parse_args()
+
     logger.info("=" * 60)
     logger.info("🔄 DATABASE RESET SCRIPT")
     logger.info("=" * 60)
@@ -93,16 +118,17 @@ if __name__ == "__main__":
     print("  - Positions")
     print("  - Signals")
     print("  - Bot status will be reset to 0")
+    print(f"  - Portfolio will be reset to ${args.capital:,.2f}")
     print("\nThis action CANNOT be undone!\n")
 
     # In production, skip confirmation (assume user knows what they're doing)
-    if len(sys.argv) > 1 and sys.argv[1] == "--confirm":
+    if args.confirm:
         logger.info("🚀 Confirmation flag detected, proceeding with reset...")
-        success = reset_database()
+        success = reset_database(args.capital)
     else:
         response = input("Type 'RESET' to confirm: ")
         if response == "RESET":
-            success = reset_database()
+            success = reset_database(args.capital)
         else:
             logger.info("❌ Reset cancelled")
             success = False
