@@ -734,3 +734,188 @@ class DatabaseManager:
                 'today_pnl_pct': 0.0,
                 'timestamp': datetime.utcnow().isoformat()
             }
+
+    # ============================================
+    # PORTFOLIO MANAGEMENT
+    # ============================================
+
+    def get_portfolio(self) -> Dict[str, Any]:
+        """
+        Get current portfolio state
+
+        Returns:
+            Dictionary with portfolio data:
+            - initial_capital: Starting capital
+            - available_balance: Money available to trade
+            - total_invested: Money currently in positions
+            - realized_pnl: Realized profit/loss from closed trades
+            - total_value: available_balance + total_invested
+        """
+        query = "SELECT * FROM portfolio WHERE id = 1"
+        result = self.execute_query(query)
+
+        if len(result) > 0:
+            row = result.iloc[0]
+            available = float(row['available_balance'])
+            invested = float(row['total_invested'])
+            return {
+                'initial_capital': float(row['initial_capital']),
+                'available_balance': available,
+                'total_invested': invested,
+                'realized_pnl': float(row['realized_pnl']),
+                'total_value': available + invested,
+                'last_update': row['last_update']
+            }
+
+        # Return defaults if no portfolio exists
+        return {
+            'initial_capital': 10000.0,
+            'available_balance': 10000.0,
+            'total_invested': 0.0,
+            'realized_pnl': 0.0,
+            'total_value': 10000.0,
+            'last_update': datetime.utcnow()
+        }
+
+    def initialize_portfolio(self, initial_capital: float = 10000.0) -> bool:
+        """
+        Initialize or reset portfolio with given capital
+
+        Args:
+            initial_capital: Starting capital amount
+
+        Returns:
+            True if successful
+        """
+        query = """
+        INSERT INTO portfolio (id, initial_capital, available_balance, total_invested, realized_pnl, created_at, last_update)
+        VALUES (1, :capital, :capital, 0.0, 0.0, NOW(), NOW())
+        ON CONFLICT (id) DO UPDATE SET
+            initial_capital = :capital,
+            available_balance = :capital,
+            total_invested = 0.0,
+            realized_pnl = 0.0,
+            last_update = NOW()
+        """
+        try:
+            self.execute_command(query, {'capital': initial_capital})
+            logger.info(f"✅ Portfolio initialized with ${initial_capital:,.2f}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize portfolio: {e}")
+            return False
+
+    def deduct_from_balance(self, amount: float, ticker: str = None) -> bool:
+        """
+        Deduct amount from available balance when buying
+
+        Args:
+            amount: USD amount to deduct
+            ticker: Optional ticker for logging
+
+        Returns:
+            True if successful, False if insufficient balance
+        """
+        # First check if we have enough balance
+        portfolio = self.get_portfolio()
+        if portfolio['available_balance'] < amount:
+            logger.warning(f"⚠️ Insufficient balance: ${portfolio['available_balance']:.2f} < ${amount:.2f}")
+            return False
+
+        query = """
+        UPDATE portfolio
+        SET available_balance = available_balance - :amount,
+            total_invested = total_invested + :amount,
+            last_update = NOW()
+        WHERE id = 1 AND available_balance >= :amount
+        """
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(text(query), {'amount': amount})
+                conn.commit()
+                if result.rowcount > 0:
+                    logger.info(f"💸 Deducted ${amount:.2f} for {ticker or 'trade'}")
+                    return True
+                return False
+        except Exception as e:
+            logger.error(f"❌ Failed to deduct from balance: {e}")
+            return False
+
+    def add_to_balance(self, amount: float, pnl: float = 0.0, ticker: str = None) -> bool:
+        """
+        Add amount to available balance when selling
+
+        Args:
+            amount: USD amount to add (sale proceeds)
+            pnl: Realized P&L from this sale
+            ticker: Optional ticker for logging
+
+        Returns:
+            True if successful
+        """
+        # Calculate how much was invested (amount - pnl = original investment)
+        invested_amount = amount - pnl
+
+        query = """
+        UPDATE portfolio
+        SET available_balance = available_balance + :amount,
+            total_invested = GREATEST(0, total_invested - :invested),
+            realized_pnl = realized_pnl + :pnl,
+            last_update = NOW()
+        WHERE id = 1
+        """
+        try:
+            self.execute_command(query, {
+                'amount': amount,
+                'invested': invested_amount,
+                'pnl': pnl
+            })
+            logger.info(f"💰 Added ${amount:.2f} from {ticker or 'sale'} (P&L: ${pnl:+.2f})")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to add to balance: {e}")
+            return False
+
+    def sync_portfolio_with_positions(self) -> Dict[str, Any]:
+        """
+        Sync total_invested with actual positions value
+
+        Returns:
+            Updated portfolio state
+        """
+        # Get sum of positions at entry price (not current price)
+        positions_query = """
+        SELECT COALESCE(SUM(quantity * avg_buy_price), 0) as total_invested
+        FROM positions
+        """
+        result = self.execute_query(positions_query)
+        actual_invested = float(result.iloc[0]['total_invested'])
+
+        # Update portfolio
+        query = """
+        UPDATE portfolio
+        SET total_invested = :invested,
+            last_update = NOW()
+        WHERE id = 1
+        """
+        self.execute_command(query, {'invested': actual_invested})
+
+        return self.get_portfolio()
+
+    def can_afford_trade(self, amount: float) -> tuple[bool, str]:
+        """
+        Check if we can afford a trade
+
+        Args:
+            amount: USD amount needed
+
+        Returns:
+            Tuple of (can_afford, reason)
+        """
+        portfolio = self.get_portfolio()
+        available = portfolio['available_balance']
+
+        if available < amount:
+            return False, f"Insufficient balance: ${available:.2f} < ${amount:.2f} needed"
+
+        return True, f"Balance OK: ${available:.2f} available"

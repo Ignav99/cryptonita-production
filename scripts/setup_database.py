@@ -118,6 +118,25 @@ CREATE TABLE IF NOT EXISTS performance_metrics (
 );
 
 CREATE INDEX IF NOT EXISTS idx_performance_date ON performance_metrics(date DESC);
+
+-- Portfolio management table (singleton - tracks capital)
+CREATE TABLE IF NOT EXISTS portfolio (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    initial_capital NUMERIC NOT NULL DEFAULT 10000.0,
+    available_balance NUMERIC NOT NULL DEFAULT 10000.0,
+    total_invested NUMERIC NOT NULL DEFAULT 0.0,
+    realized_pnl NUMERIC NOT NULL DEFAULT 0.0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_update TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT check_portfolio_singleton CHECK (id = 1),
+    CONSTRAINT check_positive_balance CHECK (available_balance >= 0),
+    CONSTRAINT check_positive_invested CHECK (total_invested >= 0)
+);
+
+-- Insert initial portfolio with default capital
+INSERT INTO portfolio (id, initial_capital, available_balance, total_invested, realized_pnl, created_at, last_update)
+VALUES (1, 10000.0, 10000.0, 0.0, 0.0, NOW(), NOW())
+ON CONFLICT (id) DO NOTHING;
 """
 
 
@@ -137,7 +156,7 @@ def create_database_schema():
         logger.success("✅ Tablas creadas exitosamente")
 
         # Verify all tables
-        tables = ['crypto_prices', 'signals', 'trades', 'bot_status', 'positions', 'performance_metrics']
+        tables = ['crypto_prices', 'signals', 'trades', 'bot_status', 'positions', 'performance_metrics', 'portfolio']
         for table in tables:
             if db.table_exists(table):
                 logger.success(f"✅ {table} - OK")

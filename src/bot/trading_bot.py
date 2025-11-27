@@ -338,9 +338,12 @@ class TradingBot:
             logger.error(f"❌ Could not get price for {ticker}")
             return
 
-        # 2. Get portfolio value
-        usdt_balance = self.binance.get_usdt_balance()
-        portfolio_value = usdt_balance  # Simplified for now
+        # 2. Get portfolio value from our managed portfolio (NOT Binance)
+        portfolio = self.db.get_portfolio()
+        portfolio_value = portfolio['total_value']
+        available_balance = portfolio['available_balance']
+
+        logger.info(f"💰 Portfolio: ${portfolio_value:.2f} total, ${available_balance:.2f} available")
 
         # 3. Check if we should trade
         current_positions = len(self.positions)
@@ -365,6 +368,12 @@ class TradingBot:
         quantity = position_info['quantity']
         usd_value = position_info['usd_value']
 
+        # 4.5 Check if we can afford this trade
+        can_afford, afford_reason = self.db.can_afford_trade(usd_value)
+        if not can_afford:
+            logger.warning(f"⚠️ Trade blocked: {afford_reason}")
+            return
+
         # Round quantity to Binance precision
         quantity = self.binance.round_quantity(ticker, quantity)
 
@@ -384,6 +393,11 @@ class TradingBot:
         executed_value = executed_price * executed_qty
 
         logger.success(f"✅ BUY executed: {executed_qty} {ticker} @ ${executed_price:.2f}")
+
+        # 6.5 Deduct from available balance
+        if not self.db.deduct_from_balance(executed_value, ticker):
+            logger.error(f"❌ Failed to deduct ${executed_value:.2f} from balance for {ticker}")
+            # Note: The trade was already executed on Binance, so we continue but log the error
 
         # 7. Calculate DYNAMIC TP/SL levels using risk manager
         # Get macro data for market conditions
@@ -645,6 +659,11 @@ class TradingBot:
         try:
             logger.info(f"💰 Executing SELL: {quantity} {ticker} @ ${price:.4f}")
 
+            # Get entry price for P&L calculation
+            entry_price = price  # Default
+            if ticker in self.positions:
+                entry_price = self.positions[ticker].get('entry_price', price)
+
             # Round quantity
             quantity = self.binance.round_quantity(ticker, quantity)
 
@@ -654,7 +673,19 @@ class TradingBot:
             if order:
                 executed_price = float(order.get('fills', [{}])[0].get('price', price))
                 executed_qty = float(order['executedQty'])
-                logger.success(f"✅ SELL executed: {executed_qty} {ticker} @ ${executed_price:.2f} | Reason: {reason}")
+                executed_value = executed_price * executed_qty
+
+                # Calculate P&L for this sale
+                sale_pnl = (executed_price - entry_price) * executed_qty
+
+                logger.success(f"✅ SELL executed: {executed_qty} {ticker} @ ${executed_price:.2f} | P&L: ${sale_pnl:+.2f} | Reason: {reason}")
+
+                # Add proceeds to available balance
+                self.db.add_to_balance(
+                    amount=executed_value,
+                    pnl=sale_pnl,
+                    ticker=ticker
+                )
 
                 # Log to database
                 self.db.save_trade(
@@ -663,7 +694,7 @@ class TradingBot:
                     action='SELL',
                     quantity=executed_qty,
                     price=executed_price,
-                    total_value=executed_price * executed_qty,
+                    total_value=executed_value,
                     status='executed',
                     probability=None  # SELL trades don't have model probability
                 )
