@@ -103,6 +103,11 @@ export const dashboard = {
     const response = await apiClient.get(`/dashboard/performance?days=${days}`);
     return response.data;
   },
+
+  getSignalAnalysis: async () => {
+    const response = await apiClient.get('/dashboard/signal-analysis');
+    return response.data;
+  },
 };
 
 // Controls API

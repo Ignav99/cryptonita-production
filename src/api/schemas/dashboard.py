@@ -69,3 +69,27 @@ class PerformanceMetric(BaseModel):
     sharpe_ratio: Optional[float]
     max_drawdown: Optional[float]
     portfolio_value: float
+
+
+class SignalPerformance(BaseModel):
+    ticker: str
+    signal_date: str
+    probability: float
+    entry_price: float
+    max_price: float
+    max_return_pct: float
+    hit_20pct: bool
+    days_available: int
+
+
+class SignalAnalysisSummary(BaseModel):
+    total_signals: int
+    hit_rate: float
+    avg_return: float
+    mature_signals: int
+    mature_hit_rate: float
+    mature_avg_return: float
+    by_probability: list
+    recent_signals: list
+    best_signals: list
+    worst_signals: list
