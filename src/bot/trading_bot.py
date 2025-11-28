@@ -135,6 +135,47 @@ class TradingBot:
         logger.info(f"  - Take Profit: {settings.TAKE_PROFIT_PCT * 100}%")
         logger.info(f"  - Stop Loss: {settings.STOP_LOSS_PCT * 100}%")
 
+    def _save_prices_to_db(self, tickers_data: Dict[str, pd.DataFrame]):
+        """
+        Mantiene la BD con exactamente 1 año de datos:
+        1. Borra el día más antiguo (cola)
+        2. Añade el día nuevo (cabeza)
+        """
+        try:
+            # 1. Borrar el día más antiguo
+            self.db.execute_query("""
+                DELETE FROM crypto_prices
+                WHERE timestamp = (SELECT MIN(timestamp) FROM crypto_prices)
+            """, {})
+            logger.debug("🗑️ Eliminado día más antiguo de crypto_prices")
+
+            # 2. Extraer solo el último día de cada ticker
+            all_data = []
+            for ticker, df in tickers_data.items():
+                if df is None or len(df) == 0:
+                    continue
+
+                ticker_df = df.copy()
+                ticker_df['timestamp'] = pd.to_datetime(ticker_df['timestamp'])
+
+                # Solo el último registro (día más reciente)
+                latest = ticker_df.iloc[[-1]].copy()
+                latest['ticker'] = ticker
+                latest = latest[['timestamp', 'ticker', 'open', 'high', 'low', 'close', 'volume']]
+                all_data.append(latest)
+
+            if not all_data:
+                return
+
+            combined_df = pd.concat(all_data, ignore_index=True)
+
+            # 3. Insertar el día nuevo
+            self.db.save_crypto_prices(combined_df)
+            logger.info(f"💾 Añadido día nuevo: {len(combined_df)} tickers")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Error actualizando crypto_prices: {e}")
+
     # ============================================
     # MAIN BOT LOOP
     # ============================================
@@ -252,6 +293,9 @@ class TradingBot:
                     logger.error(f"❌ Failed to fetch {ticker}: {e}")
 
             logger.info(f"✅ Fetched data for {len(tickers_data)} tickers")
+
+            # 3b. Save latest data to database for historical analysis
+            self._save_prices_to_db(tickers_data)
 
             # 4. Make predictions
             logger.info("🔮 Making predictions...")
