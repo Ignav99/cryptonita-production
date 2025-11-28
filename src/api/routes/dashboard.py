@@ -13,15 +13,11 @@ from src.api.schemas.dashboard import (
 )
 import pandas as pd
 from src.data.storage.db_manager import DatabaseManager
-from src.services.binance_service import BinanceService
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 # Database instance
 db = DatabaseManager(settings.get_database_url())
-
-# Binance service instance
-binance = BinanceService()
 
 
 @router.get("/stats", response_model=DashboardStats)
