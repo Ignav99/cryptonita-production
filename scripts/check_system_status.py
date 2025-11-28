@@ -145,17 +145,15 @@ def check_system_status():
         usdt_balance = binance.get_usdt_balance()
         logger.info(f"   💵 USDT Balance (Testnet): ${usdt_balance:,.2f}")
 
-        # Get positions from testnet
-        testnet_positions = binance.get_all_positions()
-        if testnet_positions:
-            logger.info(f"   📊 Posiciones en Testnet: {len(testnet_positions)}")
-            for pos in testnet_positions[:10]:  # Show first 10
-                symbol = pos.get('symbol', 'N/A')
-                qty = float(pos.get('free', 0)) + float(pos.get('locked', 0))
-                if qty > 0:
-                    logger.info(f"      {symbol}: {qty}")
-        else:
-            logger.info("   📭 No hay posiciones en Testnet")
+        if usdt_balance < 100:
+            logger.warning("   ⚠️ Balance bajo - considerar esperar reset mensual del testnet")
+            warnings.append(f"Balance testnet bajo: ${usdt_balance:.2f}")
+
+        # Count wallet assets (NOT positions - just informational)
+        wallet_assets = binance.get_account_balance()
+        non_zero_assets = len([a for a, b in wallet_assets.items() if b['total'] > 0])
+        logger.info(f"   📦 Activos en wallet testnet: {non_zero_assets} (monedas de prueba, NO posiciones)")
+        logger.info("   ℹ️  Nota: Las posiciones REALES del bot están en la tabla 'positions' de la BD")
 
     except Exception as e:
         logger.error(f"   ❌ Error conectando a Binance: {e}")
