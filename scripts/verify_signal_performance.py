@@ -70,8 +70,17 @@ def verify_signal_performance():
 
         entry_price = float(price_at_signal.iloc[0]['close'])
 
-        # Obtener precio máximo en los siguientes 30 días
-        end_date = signal_date + timedelta(days=30)
+        # Obtener fecha más reciente en la BD para este ticker
+        latest_date_df = db.execute_query("""
+            SELECT MAX(timestamp) as latest FROM crypto_prices WHERE ticker = :ticker
+        """, {'ticker': ticker})
+        latest_date = pd.to_datetime(latest_date_df.iloc[0]['latest']).tz_localize(None)
+
+        # Calcular días disponibles desde la señal
+        days_available = (latest_date - signal_date).days
+
+        # Obtener precio máximo en los siguientes 30 días (o hasta donde haya datos)
+        end_date = min(signal_date + timedelta(days=30), latest_date)
 
         max_price_df = db.execute_query("""
             SELECT MAX(high) as max_price, MAX(close) as max_close
@@ -99,7 +108,8 @@ def verify_signal_performance():
             'entry_price': entry_price,
             'max_price': max_price,
             'max_return_pct': max_return,
-            'hit_20pct': hit_target
+            'hit_20pct': hit_target,
+            'days_available': days_available
         })
 
     if not results:
@@ -122,12 +132,38 @@ def verify_signal_performance():
     logger.info(f"❌ No alcanzaron +20%: {total - hits} ({100 - hit_rate:.1f}%)")
 
     # Estadísticas de rendimiento
-    logger.info(f"\n📊 Estadísticas de rendimiento máximo:")
+    logger.info(f"\n📊 Estadísticas de rendimiento máximo (TODAS):")
     logger.info(f"   Media: {results_df['max_return_pct'].mean():.2f}%")
     logger.info(f"   Mediana: {results_df['max_return_pct'].median():.2f}%")
     logger.info(f"   Min: {results_df['max_return_pct'].min():.2f}%")
     logger.info(f"   Max: {results_df['max_return_pct'].max():.2f}%")
-    logger.info(f"   Std: {results_df['max_return_pct'].std():.2f}%")
+
+    # ANÁLISIS CRÍTICO: Señales maduras vs recientes
+    logger.info("\n" + "=" * 70)
+    logger.info("⚠️  ANÁLISIS CRÍTICO: SEÑALES MADURAS vs RECIENTES")
+    logger.info("=" * 70)
+    logger.info("Las señales recientes NO han tenido tiempo de alcanzar +20%")
+
+    mature_df = results_df[results_df['days_available'] >= 20]
+    recent_df = results_df[results_df['days_available'] < 20]
+
+    if len(mature_df) > 0:
+        mature_hits = mature_df['hit_20pct'].sum()
+        mature_rate = mature_hits / len(mature_df) * 100
+        logger.info(f"\n🟢 SEÑALES MADURAS (≥20 días disponibles):")
+        logger.info(f"   Total: {len(mature_df)}")
+        logger.info(f"   Hit rate (+20%): {mature_rate:.1f}%")
+        logger.info(f"   Rendimiento medio: {mature_df['max_return_pct'].mean():.2f}%")
+        logger.info(f"   Días disponibles medio: {mature_df['days_available'].mean():.0f}")
+
+    if len(recent_df) > 0:
+        recent_hits = recent_df['hit_20pct'].sum()
+        recent_rate = recent_hits / len(recent_df) * 100 if len(recent_df) > 0 else 0
+        logger.info(f"\n🟡 SEÑALES RECIENTES (<20 días disponibles):")
+        logger.info(f"   Total: {len(recent_df)}")
+        logger.info(f"   Hit rate (+20%): {recent_rate:.1f}% (NO REPRESENTATIVO)")
+        logger.info(f"   Rendimiento medio: {recent_df['max_return_pct'].mean():.2f}%")
+        logger.info(f"   Días disponibles medio: {recent_df['days_available'].mean():.0f}")
 
     # Por rangos de probabilidad
     logger.info("\n" + "-" * 70)
@@ -209,20 +245,43 @@ def verify_signal_performance():
     for date, row in date_stats.iterrows():
         logger.info(f"   {date} | {int(row['signals']):3d} signals | avg: {row['avg_return']:+6.2f}% | hit rate: {row['hit_rate']:5.1f}%")
 
-    # Conclusión
+    # Conclusión - USAR SOLO SEÑALES MADURAS para evaluar
     logger.info("\n" + "=" * 70)
-    logger.info("CONCLUSIÓN")
+    logger.info("CONCLUSIÓN (basada en señales maduras ≥20 días)")
     logger.info("=" * 70)
 
-    if hit_rate >= 60:
-        logger.success(f"\n✅ MODELO FUNCIONA BIEN - Hit rate: {hit_rate:.1f}%")
-        logger.info("   Las señales están prediciendo pumps reales.")
-    elif hit_rate >= 40:
-        logger.warning(f"\n⚠️ MODELO FUNCIONA MODERADAMENTE - Hit rate: {hit_rate:.1f}%")
-        logger.info("   Algunas señales aciertan, pero hay margen de mejora.")
+    # Usar hit rate de señales maduras, no de todas
+    mature_df = results_df[results_df['days_available'] >= 20]
+    if len(mature_df) > 0:
+        mature_hit_rate = mature_df['hit_20pct'].sum() / len(mature_df) * 100
+        mature_avg_return = mature_df['max_return_pct'].mean()
     else:
-        logger.error(f"\n❌ MODELO NECESITA REVISIÓN - Hit rate: {hit_rate:.1f}%")
-        logger.info("   Las señales no están correlacionadas con pumps reales.")
+        mature_hit_rate = hit_rate
+        mature_avg_return = results_df['max_return_pct'].mean()
+
+    logger.info(f"\n📊 Señales maduras: {len(mature_df)}")
+    logger.info(f"📊 Hit rate (maduras): {mature_hit_rate:.1f}%")
+    logger.info(f"📊 Rendimiento medio (maduras): {mature_avg_return:.1f}%")
+
+    if mature_hit_rate >= 60:
+        logger.success(f"\n✅ MODELO FUNCIONA BIEN - Hit rate: {mature_hit_rate:.1f}%")
+        logger.info("   Las señales maduras están prediciendo pumps reales.")
+        logger.info("   El modelo detecta correctamente oportunidades de rebote.")
+    elif mature_hit_rate >= 40:
+        logger.warning(f"\n⚠️ MODELO FUNCIONA MODERADAMENTE - Hit rate: {mature_hit_rate:.1f}%")
+        logger.info("   Algunas señales aciertan, rendimiento positivo pero menor al target.")
+    else:
+        logger.error(f"\n❌ MODELO NECESITA REVISIÓN - Hit rate: {mature_hit_rate:.1f}%")
+        logger.info("   Las señales no están correlacionadas con pumps +20%.")
+
+    # Recomendaciones
+    logger.info("\n" + "-" * 70)
+    logger.info("RECOMENDACIONES")
+    logger.info("-" * 70)
+    if mature_avg_return >= 15 and mature_hit_rate < 60:
+        logger.info("   - Rendimiento medio bueno pero target muy alto")
+        logger.info("   - Considerar reducir target de +20% a +15%")
+        logger.info("   - O ajustar take-profit dinámico al rendimiento real")
 
     return results_df
 
