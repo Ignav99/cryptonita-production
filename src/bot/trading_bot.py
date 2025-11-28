@@ -295,7 +295,9 @@ class TradingBot:
             logger.info(f"✅ Fetched data for {len(tickers_data)} tickers")
 
             # 3b. Save latest data to database for historical analysis
-            self._save_prices_to_db(tickers_data)
+            # Incluir BTCUSDT para features de correlación
+            tickers_data_with_btc = {'BTCUSDT': btc_data, **tickers_data}
+            self._save_prices_to_db(tickers_data_with_btc)
 
             # 4. Make predictions
             logger.info("🔮 Making predictions...")
