@@ -76,15 +76,18 @@ def run_initial_data_load(days: int = 365, force: bool = False):
     except Exception as e:
         logger.warning(f"No se pudo verificar estado: {e}")
 
+    # Lista de tickers a descargar (incluye BTCUSDT para correlación)
+    tickers_to_load = ['BTCUSDT'] + list(settings.TICKERS)
+
     # Descargar datos para cada ticker
-    logger.info(f"\n📥 Descargando {days} días para {len(settings.TICKERS)} tickers...")
+    logger.info(f"\n📥 Descargando {days} días para {len(tickers_to_load)} tickers (incluye BTCUSDT)...")
 
     all_data = []
     success_count = 0
     failed_tickers = []
 
-    for i, ticker in enumerate(settings.TICKERS, 1):
-        logger.info(f"[{i}/{len(settings.TICKERS)}] {ticker}...")
+    for i, ticker in enumerate(tickers_to_load, 1):
+        logger.info(f"[{i}/{len(tickers_to_load)}] {ticker}...")
 
         try:
             # Usar BinanceDataService existente
