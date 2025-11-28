@@ -135,6 +135,59 @@ class TradingBot:
         logger.info(f"  - Take Profit: {settings.TAKE_PROFIT_PCT * 100}%")
         logger.info(f"  - Stop Loss: {settings.STOP_LOSS_PCT * 100}%")
 
+    def _save_prices_to_db(self, tickers_data: Dict[str, pd.DataFrame]):
+        """
+        Guarda los precios de hoy en crypto_prices para análisis histórico.
+
+        Estrategia:
+        - Guarda solo los últimos 3 días de datos de cada ticker
+        - Esto mantiene la BD actualizada sin duplicar todo el histórico
+        - La BD debe tener ~1 año de datos (cargados con load_historical_data.py)
+        """
+        try:
+            all_data = []
+            today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            cutoff_date = today - timedelta(days=3)
+
+            for ticker, df in tickers_data.items():
+                if df is None or len(df) == 0:
+                    continue
+
+                # Copiar para no modificar original
+                ticker_df = df.copy()
+                ticker_df['ticker'] = ticker
+
+                # Filtrar solo últimos 3 días
+                ticker_df['timestamp'] = pd.to_datetime(ticker_df['timestamp'])
+                recent_df = ticker_df[ticker_df['timestamp'] >= cutoff_date]
+
+                if len(recent_df) > 0:
+                    recent_df = recent_df[['timestamp', 'ticker', 'open', 'high', 'low', 'close', 'volume']]
+                    all_data.append(recent_df)
+
+            if not all_data:
+                logger.warning("⚠️ No hay datos recientes para guardar")
+                return
+
+            combined_df = pd.concat(all_data, ignore_index=True)
+
+            # Eliminar datos antiguos de estos tickers en los últimos 3 días (para evitar duplicados)
+            try:
+                self.db.execute_query("""
+                    DELETE FROM crypto_prices
+                    WHERE timestamp >= :cutoff_date
+                """, {'cutoff_date': cutoff_date})
+            except Exception:
+                pass  # La tabla puede no tener datos
+
+            # Insertar nuevos datos
+            self.db.save_crypto_prices(combined_df)
+            logger.info(f"💾 Guardados {len(combined_df)} registros de precios en BD")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Error guardando precios en BD: {e}")
+            # No interrumpir el flujo del bot
+
     # ============================================
     # MAIN BOT LOOP
     # ============================================
@@ -252,6 +305,9 @@ class TradingBot:
                     logger.error(f"❌ Failed to fetch {ticker}: {e}")
 
             logger.info(f"✅ Fetched data for {len(tickers_data)} tickers")
+
+            # 3b. Save latest data to database for historical analysis
+            self._save_prices_to_db(tickers_data)
 
             # 4. Make predictions
             logger.info("🔮 Making predictions...")
