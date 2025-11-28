@@ -11,7 +11,10 @@ class DashboardStats(BaseModel):
     executed_trades: int
     active_positions: int
     portfolio_value: float
+    usdt_balance: float
+    positions_value: float
     total_pnl: float
+    total_pnl_pct: float
     win_rate: float
     timestamp: str
 
