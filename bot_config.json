@@ -6,7 +6,7 @@
   },
   "trading": {
     "scan_interval_hours": 12,
-    "position_monitoring_minutes": 5,
+    "position_monitoring_minutes": 15,
     "auto_trading_enabled": true,
     "require_manual_approval": false,
     "testnet_capital_usd": 5000,

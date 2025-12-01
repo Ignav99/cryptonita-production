@@ -3,7 +3,7 @@ CRYPTONITA TRADING BOT V3
 ==========================
 Main trading bot implementation with:
 - Market scanning every 12 hours
-- Position monitoring every 5 minutes
+- Position monitoring every 15 minutes
 - Automatic trade execution
 - Risk management
 - Database logging
@@ -112,7 +112,7 @@ class TradingBot:
         return {
             "trading": {
                 "scan_interval_hours": 12,
-                "position_monitoring_minutes": 5,
+                "position_monitoring_minutes": 15,
                 "auto_trading_enabled": True,
                 "require_manual_approval": False
             },
@@ -749,26 +749,26 @@ class TradingBot:
             logger.error(f"❌ Exit failed for {ticker}: {e}")
 
     # ============================================
-    # BINANCE SYNC (every 30 minutes)
+    # BINANCE SYNC (every 60 minutes)
     # ============================================
 
     async def _binance_sync_loop(self):
-        """Sync positions with Binance every 30 minutes"""
-        logger.info("🔄 Binance sync started (interval: 30min)")
+        """Sync positions with Binance every 60 minutes"""
+        logger.info("🔄 Binance sync started (interval: 60min)")
 
         while self.is_running:
             try:
                 await self._sync_positions_with_binance()
 
-                # Wait for next sync interval (30 minutes)
-                await asyncio.sleep(30 * 60)
+                # Wait for next sync interval (60 minutes)
+                await asyncio.sleep(60 * 60)
 
             except Exception as e:
                 logger.error(f"❌ Error in Binance sync: {e}")
                 await asyncio.sleep(60)
 
     async def _sync_positions_with_binance(self):
-        """Fetch real positions from Binance and update database"""
+        """Fetch real positions from Binance and update database (optimized)"""
         try:
             logger.info("🔄 Syncing positions with Binance...")
 
@@ -779,18 +779,24 @@ class TradingBot:
                 logger.info("📊 No bot positions to sync")
                 return
 
-            # Get all balances from Binance ONCE (not inside loop!)
+            # Get all balances from Binance ONCE
             logger.debug("📊 Fetching account balances from Binance...")
             balances = self.binance.get_account_balance()
 
-            # Update each position with current price from Binance
+            # Get all tickers we need prices for
+            tickers = [row['ticker'] for _, row in db_positions.iterrows()]
+
+            # Fetch ALL prices in ONE API call
+            all_prices = self.binance.get_multiple_prices(tickers)
+
+            # Update each position
             synced_count = 0
             for _, db_pos in db_positions.iterrows():
                 ticker = db_pos['ticker']
 
                 try:
-                    # Get current price from Binance
-                    current_price = self.binance.get_current_price(ticker)
+                    # Get current price from batch
+                    current_price = all_prices.get(ticker)
                     if current_price is None:
                         logger.warning(f"⚠️ Could not get price for {ticker}")
                         continue
