@@ -369,3 +369,52 @@ async def trigger_training(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Failed to trigger training: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/reset-database", response_model=BotControlResponse)
+async def reset_database(current_user: dict = Depends(get_current_user)):
+    """Reset all database data — clean slate. Stops bot first."""
+    try:
+        from sqlalchemy import text
+
+        # Stop bot if running
+        if bot_manager.is_running():
+            bot_manager.stop(reason="Database reset")
+
+        with db.engine.connect() as conn:
+            conn.execute(text("DELETE FROM trades"))
+            conn.execute(text("DELETE FROM positions"))
+            conn.execute(text("DELETE FROM signals"))
+            conn.execute(text("DELETE FROM crypto_prices"))
+            conn.execute(text("DELETE FROM performance_metrics"))
+
+            # Clean auto-training tables
+            try:
+                conn.execute(text("DELETE FROM training_runs"))
+            except Exception:
+                pass
+            try:
+                conn.execute(text("DELETE FROM model_artifacts"))
+            except Exception:
+                pass
+
+            conn.execute(text("""
+                UPDATE bot_status
+                SET cycle_number = 0, total_signals = 0, buy_signals = 0,
+                    status = 'stopped', last_error = NULL, last_update = NOW()
+            """))
+            conn.commit()
+
+        # Reset portfolio
+        db.initialize_portfolio(settings.INITIAL_CAPITAL)
+
+        logger.warning(f"Database reset by {current_user['username']}")
+
+        return BotControlResponse(
+            success=True,
+            message=f"Database reset complete. Portfolio: ${settings.INITIAL_CAPITAL:,.2f}",
+            status="stopped",
+        )
+    except Exception as e:
+        logger.error(f"Failed to reset database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

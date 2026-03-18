@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Play, Square, RotateCw, Pause, Cpu, Activity } from 'lucide-react';
+import { Play, Square, RotateCw, Pause, Cpu, Activity, Trash2 } from 'lucide-react';
 import { controls } from '../api/client';
 
 const BotControls = ({ botStatus, onStatusChange }) => {
   const [loading, setLoading] = useState(false);
   const [processStatus, setProcessStatus] = useState(null);
   const [error, setError] = useState(null);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   const isRunning = botStatus?.status === 'running';
   const isPaused = botStatus?.status === 'idle';
@@ -99,6 +100,25 @@ const BotControls = ({ botStatus, onStatusChange }) => {
     }
   };
 
+  const handleReset = async () => {
+    setLoading(true);
+    setError(null);
+    setShowResetConfirm(false);
+
+    try {
+      const result = await controls.resetDatabase();
+      if (result.success) {
+        onStatusChange?.();
+      } else {
+        setError(result.message);
+      }
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to reset database');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const formatUptime = (seconds) => {
     if (!seconds) return '0s';
 
@@ -178,6 +198,41 @@ const BotControls = ({ botStatus, onStatusChange }) => {
           <RotateCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           Restart
         </button>
+      </div>
+
+      {/* Reset Database */}
+      <div className="mb-6">
+        {!showResetConfirm ? (
+          <button
+            onClick={() => setShowResetConfirm(true)}
+            disabled={loading}
+            className="w-full py-2 px-4 rounded-lg text-sm font-medium border border-red-300 text-red-600 hover:bg-red-50 transition-colors flex items-center justify-center gap-2"
+          >
+            <Trash2 className="w-4 h-4" />
+            Reset Database
+          </button>
+        ) : (
+          <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-sm text-red-700 mb-3 font-medium">
+              This will delete ALL trades, signals, positions, and training data. Are you sure?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={handleReset}
+                disabled={loading}
+                className="btn-danger flex-1 text-sm"
+              >
+                Yes, Reset Everything
+              </button>
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                className="btn-secondary flex-1 text-sm"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Process Status */}

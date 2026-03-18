@@ -44,6 +44,25 @@ def reset_database(initial_capital: float = 10000.0):
             logger.info("  - Deleting signals...")
             conn.execute(text("DELETE FROM signals"))
 
+            logger.info("  - Deleting crypto prices...")
+            conn.execute(text("DELETE FROM crypto_prices"))
+
+            logger.info("  - Deleting performance metrics...")
+            conn.execute(text("DELETE FROM performance_metrics"))
+
+            # Clean auto-training tables (if they exist)
+            try:
+                conn.execute(text("DELETE FROM training_runs"))
+                logger.info("  - Deleting training runs...")
+            except Exception:
+                pass
+
+            try:
+                conn.execute(text("DELETE FROM model_artifacts"))
+                logger.info("  - Deleting model artifacts...")
+            except Exception:
+                pass
+
             logger.info("  - Resetting bot status...")
             conn.execute(text("""
                 UPDATE bot_status

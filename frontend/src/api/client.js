@@ -151,6 +151,11 @@ export const controls = {
     const response = await apiClient.post('/controls/trigger-training');
     return response.data;
   },
+
+  resetDatabase: async () => {
+    const response = await apiClient.post('/controls/reset-database');
+    return response.data;
+  },
 };
 
 export default apiClient;

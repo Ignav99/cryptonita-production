@@ -157,7 +157,7 @@ function App() {
 
           {/* Footer */}
           <div className="text-center mt-8 text-sm text-gray-600">
-            <p>Cryptonita Trading Bot V3</p>
+            <p>Cryptonita Trading Bot V4</p>
             <p className="mt-1">ML-Powered Cryptocurrency Trading</p>
           </div>
         </div>
