@@ -16,8 +16,10 @@ class DashboardStats(BaseModel):
     total_pnl: float
     total_pnl_pct: float
     win_rate: float
-    winning_trades: int
-    closed_trades: int
+    realized_pnl: Optional[float] = 0.0
+    unrealized_pnl: Optional[float] = 0.0
+    today_pnl: Optional[float] = 0.0
+    today_pnl_pct: Optional[float] = 0.0
     timestamp: str
 
 

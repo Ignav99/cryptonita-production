@@ -152,7 +152,7 @@ class TradingBot:
         """
         try:
             # 1. Borrar el día más antiguo
-            self.db.execute_query("""
+            self.db.execute_command("""
                 DELETE FROM crypto_prices
                 WHERE timestamp = (SELECT MIN(timestamp) FROM crypto_prices)
             """, {})

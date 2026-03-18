@@ -47,13 +47,18 @@ class OnChainFetcher:
             }
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.get(url, params=params)
+                if resp.status_code == 400:
+                    logger.debug(f"CoinMetrics metric {metric} not available (400)")
+                    return None
                 resp.raise_for_status()
                 data = resp.json()
                 rows = data.get("data", [])
                 if rows and metric in rows[0]:
-                    return float(rows[0][metric])
+                    val = rows[0][metric]
+                    if val is not None and val != "":
+                        return float(val)
         except Exception as e:
-            logger.warning(f"Failed to fetch {metric} for {asset}: {e}")
+            logger.debug(f"CoinMetrics {metric}/{asset}: {e}")
         return None
 
     async def get_mvrv(self, asset: str = "BTC") -> Optional[float]:
