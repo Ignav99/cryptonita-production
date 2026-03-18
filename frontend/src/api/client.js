@@ -141,6 +141,16 @@ export const controls = {
     const response = await apiClient.get('/controls/process-status');
     return response.data;
   },
+
+  getTrainingStatus: async () => {
+    const response = await apiClient.get('/controls/training-status');
+    return response.data;
+  },
+
+  triggerTraining: async () => {
+    const response = await apiClient.post('/controls/trigger-training');
+    return response.data;
+  },
 };
 
 export default apiClient;

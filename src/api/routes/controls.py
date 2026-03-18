@@ -7,7 +7,8 @@ from loguru import logger
 from config import settings
 from src.api.auth import get_current_user
 from src.api.schemas.controls import (
-    StartBotRequest, StopBotRequest, ManualTradeRequest, BotControlResponse
+    StartBotRequest, StopBotRequest, ManualTradeRequest, BotControlResponse,
+    TrainingStatusResponse, TrainingRunResponse,
 )
 from src.data.storage.db_manager import DatabaseManager
 from src.bot.bot_manager import BotManager
@@ -289,4 +290,82 @@ async def restart_bot(
         )
     except Exception as e:
         logger.error(f"Failed to restart bot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# AUTO-TRAINING ENDPOINTS
+# ============================================
+
+@router.get("/training-status", response_model=TrainingStatusResponse)
+async def get_training_status(current_user: dict = Depends(get_current_user)):
+    """Get auto-training status, active model version, and training history."""
+    try:
+        from src.models.model_store import ModelStore
+        store = ModelStore(db)
+
+        has_active = store.has_active_model()
+        active_version = None
+        if has_active:
+            active_version = store.get_latest_version()
+            # Get exact active version
+            result = db.execute_query(
+                "SELECT DISTINCT version FROM model_artifacts WHERE is_active = TRUE LIMIT 1"
+            )
+            if len(result) > 0:
+                active_version = int(result.iloc[0]["version"])
+
+        history = store.get_training_history(limit=10)
+        history_items = [TrainingRunResponse(**h) for h in history]
+
+        # Check if training is in progress
+        is_training = False
+        try:
+            from src.models.auto_trainer import AutoTrainer
+            trainer = AutoTrainer(model_store=store)
+            is_training = trainer.is_training
+        except Exception:
+            pass
+
+        return TrainingStatusResponse(
+            active_model_version=active_version,
+            has_active_model=has_active,
+            is_training=is_training,
+            auto_train_enabled=getattr(settings, "AUTO_TRAIN_ENABLED", False),
+            auto_train_interval_days=getattr(settings, "AUTO_TRAIN_INTERVAL_DAYS", 7),
+            training_history=history_items,
+        )
+    except Exception as e:
+        logger.error(f"Failed to get training status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/trigger-training", response_model=BotControlResponse)
+async def trigger_training(current_user: dict = Depends(get_current_user)):
+    """Manually trigger a training run (runs async in background)."""
+    try:
+        import asyncio
+        from src.models.auto_trainer import AutoTrainer
+
+        trainer = AutoTrainer()
+
+        if trainer.is_training:
+            return BotControlResponse(
+                success=False,
+                message="Training is already in progress",
+                status="training",
+            )
+
+        # Run in background
+        asyncio.create_task(trainer.run_auto_training())
+
+        logger.info(f"Manual training triggered by {current_user['username']}")
+
+        return BotControlResponse(
+            success=True,
+            message="Training started in background. Check /controls/training-status for progress.",
+            status="training",
+        )
+    except Exception as e:
+        logger.error(f"Failed to trigger training: {e}")
         raise HTTPException(status_code=500, detail=str(e))

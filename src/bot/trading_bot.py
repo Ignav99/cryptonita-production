@@ -213,8 +213,13 @@ class TradingBot:
         tasks = [
             asyncio.create_task(self._market_scan_loop()),
             asyncio.create_task(self._position_monitoring_loop()),
-            asyncio.create_task(self._binance_sync_loop())
+            asyncio.create_task(self._binance_sync_loop()),
         ]
+
+        # Add auto-training loop if enabled and using V4
+        if getattr(settings, 'AUTO_TRAIN_ENABLED', False) and getattr(settings, 'USE_V4_MODEL', False):
+            tasks.append(asyncio.create_task(self._auto_training_loop()))
+            logger.info("Auto-training loop enabled")
 
         logger.success("✅ Trading bot started successfully")
 
@@ -841,6 +846,51 @@ class TradingBot:
 
         except Exception as e:
             logger.error(f"❌ Failed to sync with Binance: {e}")
+
+    # ============================================
+    # AUTO-TRAINING LOOP (weekly)
+    # ============================================
+
+    async def _auto_training_loop(self):
+        """Periodically retrain V4 model and promote if it outperforms the current one."""
+        interval_days = getattr(settings, 'AUTO_TRAIN_INTERVAL_DAYS', 7)
+        initial_delay_hours = 1  # Let the bot stabilize before first training
+
+        logger.info(f"Auto-training loop started (interval: {interval_days}d, first run in {initial_delay_hours}h)")
+
+        # Wait before first training
+        for _ in range(initial_delay_hours * 60):
+            if not self.is_running:
+                return
+            await asyncio.sleep(60)
+
+        while self.is_running:
+            try:
+                from src.models.auto_trainer import AutoTrainer
+                trainer = AutoTrainer()
+
+                logger.info("Starting auto-training cycle...")
+                result = await trainer.run_auto_training()
+
+                if result.get("promoted"):
+                    # Trigger hot-reload on the predictor
+                    if hasattr(self.predictor, 'request_reload'):
+                        self.predictor.request_reload()
+                        logger.success(f"Model v{result['version']} promoted — predictor will reload on next prediction")
+
+                logger.info(f"Auto-training result: {result.get('status')}")
+
+            except Exception as e:
+                logger.error(f"Auto-training loop error: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+
+            # Wait for next cycle
+            wait_seconds = interval_days * 24 * 3600
+            for _ in range(int(wait_seconds / 60)):
+                if not self.is_running:
+                    return
+                await asyncio.sleep(60)
 
     # ============================================
     # UTILITIES

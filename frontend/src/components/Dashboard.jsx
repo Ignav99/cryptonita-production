@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { RefreshCw, LayoutDashboard, BarChart3 } from 'lucide-react';
+import { RefreshCw, LayoutDashboard, BarChart3, Brain } from 'lucide-react';
 import { dashboard } from '../api/client';
 import useWebSocket from '../hooks/useWebSocket';
 import Stats from './Stats';
@@ -9,6 +9,7 @@ import ClosedPositions from './ClosedPositions';
 import Signals from './Signals';
 import Trades from './Trades';
 import Analysis from './Analysis';
+import Training from './Training';
 
 const Dashboard = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -165,13 +166,24 @@ const Dashboard = () => {
               <BarChart3 className="w-4 h-4" />
               Analysis
             </button>
+            <button
+              onClick={() => setActiveTab('training')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-t-lg font-medium transition-colors ${
+                activeTab === 'training'
+                  ? 'bg-gray-50 text-blue-600 border-t border-l border-r border-gray-200'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+              }`}
+            >
+              <Brain className="w-4 h-4" />
+              Training
+            </button>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === 'dashboard' ? (
+        {activeTab === 'dashboard' && (
           <div className="space-y-6">
             {/* Stats Cards */}
             <Stats stats={stats} />
@@ -201,9 +213,9 @@ const Dashboard = () => {
               <Trades trades={trades} limit={20} />
             </div>
           </div>
-        ) : (
-          <Analysis />
         )}
+        {activeTab === 'analysis' && <Analysis />}
+        {activeTab === 'training' && <Training />}
       </main>
 
       {/* Footer */}
@@ -211,11 +223,13 @@ const Dashboard = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between text-sm text-gray-600">
             <div>
-              <span className="font-semibold">Cryptonita V3</span>
+              <span className="font-semibold">Cryptonita V4</span>
               <span className="mx-2">•</span>
-              <span>XGBoost Model</span>
+              <span>Ensemble (XGB + LGBM + CatBoost)</span>
               <span className="mx-2">•</span>
-              <span>48 Features</span>
+              <span>~80 Features</span>
+              <span className="mx-2">•</span>
+              <span>Auto-Training</span>
               <span className="mx-2">•</span>
               <span>Dynamic TP/SL</span>
             </div>

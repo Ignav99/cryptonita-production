@@ -9,6 +9,7 @@ Same interface: predict_single, predict_multiple, should_trade, calculate_positi
 """
 
 import asyncio
+import threading
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -36,19 +37,14 @@ class TradingPredictorV4:
     def __init__(self):
         model_dir = getattr(settings, "V4_MODEL_DIR", "PRODUCTION_SYSTEM/models/v4")
         self.model_dir = Path(model_dir)
+        self._lock = threading.Lock()
+        self._needs_reload = False
+        self._active_version = None
 
-        # Load ensemble model
+        # Try loading from DB first, fall back to filesystem
         self.ensemble = EnsembleModel()
-        self.ensemble.load(str(self.model_dir))
-
-        # Load regime detector
         self.regime_detector = RegimeDetector()
-        regime_path = self.model_dir / "regime_detector.pkl"
-        if regime_path.exists():
-            self.regime_detector.load(str(regime_path))
-            logger.info("Regime detector loaded")
-        else:
-            logger.warning("No regime detector found — using defaults")
+        self._load_models()
 
         # Initialize feature engineer
         self.feature_engineer = FeatureEngineerV4()
@@ -72,6 +68,79 @@ class TradingPredictorV4:
         self._cached_regime = None
 
         logger.info(f"TradingPredictorV4 initialized — Threshold: {self.threshold}")
+
+    def _load_models(self):
+        """Load models: try DB first, then filesystem."""
+        loaded = False
+
+        # Try loading from DB
+        try:
+            from src.models.model_store import ModelStore
+            store = ModelStore()
+            if store.has_active_model():
+                self.model_dir.mkdir(parents=True, exist_ok=True)
+                version = store.load_active_ensemble(str(self.model_dir))
+                if version is not None:
+                    self.ensemble.load(str(self.model_dir))
+                    regime_path = self.model_dir / "regime_detector.pkl"
+                    if regime_path.exists():
+                        self.regime_detector.load(str(regime_path))
+                    self._active_version = version
+                    loaded = True
+                    logger.info(f"Loaded V4 model v{version} from DB")
+        except Exception as e:
+            logger.warning(f"Failed to load model from DB: {e}")
+
+        # Fall back to filesystem
+        if not loaded:
+            try:
+                if (self.model_dir / "ensemble_metadata.json").exists():
+                    self.ensemble.load(str(self.model_dir))
+                    regime_path = self.model_dir / "regime_detector.pkl"
+                    if regime_path.exists():
+                        self.regime_detector.load(str(regime_path))
+                    loaded = True
+                    logger.info("Loaded V4 model from filesystem (fallback)")
+            except Exception as e:
+                logger.error(f"Failed to load V4 model from filesystem: {e}")
+
+        if not loaded:
+            logger.error("No V4 model available — predictions will return HOLD")
+
+    def reload_model(self):
+        """Reload model from DB after auto-training promotes a new version. Thread-safe."""
+        with self._lock:
+            try:
+                from src.models.model_store import ModelStore
+                store = ModelStore()
+
+                new_ensemble = EnsembleModel()
+                new_regime = RegimeDetector()
+
+                self.model_dir.mkdir(parents=True, exist_ok=True)
+                version = store.load_active_ensemble(str(self.model_dir))
+                if version is None:
+                    logger.warning("reload_model: no active model in DB")
+                    return
+
+                new_ensemble.load(str(self.model_dir))
+                regime_path = self.model_dir / "regime_detector.pkl"
+                if regime_path.exists():
+                    new_regime.load(str(regime_path))
+
+                # Atomic swap
+                self.ensemble = new_ensemble
+                self.regime_detector = new_regime
+                self._active_version = version
+                self._needs_reload = False
+                logger.success(f"Hot-reloaded V4 model v{version}")
+
+            except Exception as e:
+                logger.error(f"Failed to reload model: {e}")
+
+    def request_reload(self):
+        """Flag that a reload is needed (called by auto-trainer after promotion)."""
+        self._needs_reload = True
 
     async def _fetch_external_data(self) -> Dict[str, Dict]:
         """Fetch all external data sources concurrently"""
@@ -189,6 +258,10 @@ class TradingPredictorV4:
         Make V4 predictions for multiple tickers.
         Same interface as TradingPredictor.predict_multiple.
         """
+        # Check if model needs hot-reload
+        if self._needs_reload:
+            self.reload_model()
+
         results = []
 
         # Refresh external data once per batch
