@@ -76,4 +76,22 @@ services:
       - key: LOG_LEVEL
         value: INFO
 
+      - key: USE_V4_MODEL
+        value: "true"
+
+      - key: AUTO_TRAIN_ENABLED
+        value: "true"
+
+      - key: AUTO_TRAIN_INTERVAL_DAYS
+        value: "7"
+
+      - key: AUTO_TRAIN_MODE
+        value: quick
+
+      - key: AUTO_TRAIN_MIN_SHARPE
+        value: "0.5"
+
+      - key: KELLY_FRACTION
+        value: "0.25"
+
     healthCheckPath: /health

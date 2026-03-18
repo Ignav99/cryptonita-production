@@ -113,8 +113,8 @@ async def root():
         <body>
             <div class="container">
                 <h1>🚀 Cryptonita Trading Bot</h1>
-                <p>ML-Powered Cryptocurrency Trading System V3</p>
-                <p>Model: XGBoost | Features: 42 | Threshold: 0.60</p>
+                <p>ML-Powered Cryptocurrency Trading System V4</p>
+                <p>Model: Ensemble (XGB+LGBM+CatBoost) | Auto-Training | ~80 Features</p>
                 <div class="links">
                     <a href="/api/docs">📚 API Documentation</a>
                     <a href="/api/dashboard/stats">📊 Dashboard API</a>
@@ -141,13 +141,37 @@ async def health_check():
 @app.on_event("startup")
 async def startup_event():
     """Run on application startup"""
+    import asyncio
     logger.info("=" * 60)
     logger.info("🚀 CRYPTONITA TRADING BOT API - STARTING")
     logger.info(f"Version: {settings.APP_VERSION}")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Trading Mode: {settings.TRADING_MODE}")
+    logger.info(f"V4 Model: {getattr(settings, 'USE_V4_MODEL', False)}")
+    logger.info(f"Auto-Train: {getattr(settings, 'AUTO_TRAIN_ENABLED', False)}")
     logger.info(f"API running on: http://{settings.API_HOST}:{settings.API_PORT}")
     logger.info("=" * 60)
+
+    # Self-ping to keep Render free tier alive (every 10 minutes)
+    if settings.ENVIRONMENT == "production":
+        asyncio.create_task(_keep_alive_loop())
+
+
+async def _keep_alive_loop():
+    """Ping ourselves every 10 minutes to prevent Render free tier from sleeping."""
+    import asyncio
+    import httpx
+
+    await asyncio.sleep(60)  # Wait 1 min after startup
+    url = "https://cryptonita-bot.onrender.com/health"
+
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(url, timeout=10)
+        except Exception:
+            pass
+        await asyncio.sleep(600)  # Every 10 minutes
 
 
 @app.on_event("shutdown")
