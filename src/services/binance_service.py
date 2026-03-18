@@ -40,6 +40,7 @@ class BinanceService:
             logger.info("💰 Binance client initialized in PRODUCTION mode")
 
         self.is_testnet = settings.is_testnet()
+        self._symbol_info_cache: Dict[str, Dict] = {}  # Cache to avoid repeated API calls
 
     # ============================================
     # MARKET DATA
@@ -426,55 +427,84 @@ class BinanceService:
     # ============================================
 
     def get_symbol_info(self, symbol: str) -> Optional[Dict]:
-        """
-        Get trading rules and info for a symbol
-
-        Args:
-            symbol: Trading pair
-
-        Returns:
-            Symbol info dict
-        """
+        """Get trading rules for a symbol (cached)"""
+        if symbol in self._symbol_info_cache:
+            return self._symbol_info_cache[symbol]
         try:
             info = self.client.get_symbol_info(symbol)
+            if info:
+                self._symbol_info_cache[symbol] = info
             return info
-
         except Exception as e:
-            logger.error(f"❌ Failed to get symbol info for {symbol}: {e}")
+            logger.error(f"Failed to get symbol info for {symbol}: {e}")
             return None
 
+    def _get_filter(self, symbol: str, filter_type: str) -> Optional[Dict]:
+        """Get a specific filter from symbol info"""
+        info = self.get_symbol_info(symbol)
+        if not info:
+            return None
+        for f in info['filters']:
+            if f['filterType'] == filter_type:
+                return f
+        return None
+
     def round_quantity(self, symbol: str, quantity: float) -> float:
-        """
-        Round quantity according to symbol's step size
-
-        Args:
-            symbol: Trading pair
-            quantity: Raw quantity
-
-        Returns:
-            Rounded quantity
-        """
+        """Round quantity to LOT_SIZE step size"""
         try:
-            info = self.get_symbol_info(symbol)
-            if not info:
+            lot_filter = self._get_filter(symbol, 'LOT_SIZE')
+            if not lot_filter:
                 return quantity
 
-            # Get LOT_SIZE filter
-            for filter in info['filters']:
-                if filter['filterType'] == 'LOT_SIZE':
-                    step_size = float(filter['stepSize'])
+            step_size = float(lot_filter['stepSize'])
+            min_qty = float(lot_filter['minQty'])
 
-                    # Round to step size
-                    precision = len(str(step_size).rstrip('0').split('.')[-1])
-                    rounded = round(quantity - (quantity % step_size), precision)
+            # Round down to step size
+            precision = max(0, len(str(step_size).rstrip('0').split('.')[-1]) if '.' in str(step_size) else 0)
+            rounded = round(quantity - (quantity % step_size), precision)
 
-                    return rounded
+            if rounded < min_qty:
+                return 0.0
 
-            return quantity
+            return rounded
 
         except Exception as e:
-            logger.error(f"❌ Failed to round quantity: {e}")
+            logger.error(f"Failed to round quantity: {e}")
             return quantity
+
+    def round_price(self, symbol: str, price: float) -> Optional[float]:
+        """Round price to PRICE_FILTER tick size"""
+        try:
+            price_filter = self._get_filter(symbol, 'PRICE_FILTER')
+            if not price_filter:
+                return price
+
+            tick_size = float(price_filter['tickSize'])
+            if tick_size <= 0:
+                return price
+
+            precision = max(0, len(str(tick_size).rstrip('0').split('.')[-1]) if '.' in str(tick_size) else 0)
+            rounded = round(price - (price % tick_size), precision)
+
+            return rounded
+
+        except Exception as e:
+            logger.error(f"Failed to round price: {e}")
+            return price
+
+    def check_min_notional(self, symbol: str, quantity: float, price: float) -> bool:
+        """Check if order meets MIN_NOTIONAL requirement"""
+        try:
+            notional_filter = self._get_filter(symbol, 'MIN_NOTIONAL') or self._get_filter(symbol, 'NOTIONAL')
+            if not notional_filter:
+                return True
+
+            min_notional = float(notional_filter.get('minNotional', 0))
+            notional = quantity * price
+            return notional >= min_notional
+
+        except Exception:
+            return True
 
     def test_connectivity(self) -> bool:
         """

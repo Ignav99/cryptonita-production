@@ -43,10 +43,10 @@ FRONTEND_DIR = Path(__file__).parent.parent.parent / "frontend"
 FRONTEND_DIST = FRONTEND_DIR / "dist"
 
 # Only mount static files if frontend is built
-if FRONTEND_DIST.exists() and (FRONTEND_DIST / "assets").exists():
+if FRONTEND_DIST.exists() and (FRONTEND_DIST / "static").exists():
     try:
-        app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
-        logger.info(f"✅ Frontend assets mounted from {FRONTEND_DIST / 'assets'}")
+        app.mount("/static", StaticFiles(directory=str(FRONTEND_DIST / "static")), name="static")
+        logger.info(f"✅ Frontend assets mounted from {FRONTEND_DIST / 'static'}")
     except Exception as e:
         logger.warning(f"⚠️ Could not mount frontend assets: {e}")
 

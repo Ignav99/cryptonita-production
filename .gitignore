@@ -55,6 +55,11 @@ log.txt
 *.model
 models/*.pkl
 !PRODUCTION_SYSTEM/models/*.json
+!PRODUCTION_SYSTEM/models/v4/*.pkl
+!PRODUCTION_SYSTEM/models/v4/*.json
+
+# Catboost temp
+catboost_info/
 
 # Data
 data/*.csv

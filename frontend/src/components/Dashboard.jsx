@@ -61,8 +61,9 @@ const Dashboard = () => {
       console.log('📡 WebSocket update:', wsData);
 
       // Update relevant data based on message type
-      if (wsData.type === 'stats') {
-        setStats(wsData.data);
+      if (wsData.type === 'dashboard_update') {
+        if (wsData.data.stats) setStats(wsData.data.stats);
+        if (wsData.data.bot_status) setBotStatus(wsData.data.bot_status);
       } else if (wsData.type === 'position_update') {
         fetchData(); // Refresh all data on position change
       } else if (wsData.type === 'new_signal') {

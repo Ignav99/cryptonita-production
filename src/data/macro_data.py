@@ -3,36 +3,32 @@ MACRO DATA FETCHER
 ==================
 Obtiene datos macro para features del modelo:
 - Fear & Greed Index
-- S&P 500 (SPX)
-- VIX (Volatility Index)
+- S&P 500 (SPX) via Yahoo Finance
+- VIX (Volatility Index) via Yahoo Finance
 - Funding Rate
 """
 
 import httpx
 from typing import Dict, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from loguru import logger
 import asyncio
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class MacroDataFetcher:
-    """
-    Fetches macro economic indicators for trading model
-    """
+    """Fetches macro economic indicators for trading model"""
 
     def __init__(self):
-        """Initialize macro data fetcher"""
         self.fear_greed_url = "https://api.alternative.me/fng/"
-        self.timeout = 10.0
-        logger.info("✅ Macro Data Fetcher initialized")
+        self.timeout = 15.0
+        logger.info("Macro Data Fetcher initialized")
 
     async def get_fear_greed_index(self) -> Optional[float]:
-        """
-        Get Fear & Greed Index from alternative.me
-
-        Returns:
-            Fear & Greed value (0-100), or None if failed
-        """
+        """Get Fear & Greed Index from alternative.me (0-100)"""
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(f"{self.fear_greed_url}?limit=1")
@@ -41,26 +37,17 @@ class MacroDataFetcher:
 
                 if 'data' in data and len(data['data']) > 0:
                     value = float(data['data'][0]['value'])
-                    logger.debug(f"📊 Fear & Greed Index: {value}")
+                    logger.debug(f"Fear & Greed Index: {value}")
                     return value
 
         except Exception as e:
-            logger.warning(f"⚠️ Failed to fetch Fear & Greed Index: {e}")
+            logger.warning(f"Failed to fetch Fear & Greed Index: {e}")
 
         return None
 
     async def get_funding_rate(self, ticker: str = "BTCUSDT") -> Optional[float]:
-        """
-        Get funding rate from Binance
-
-        Args:
-            ticker: Trading pair (default: BTCUSDT)
-
-        Returns:
-            Funding rate, or None if failed
-        """
+        """Get funding rate from Binance"""
         try:
-            # Binance funding rate endpoint
             url = f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={ticker}&limit=1"
 
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -70,127 +57,133 @@ class MacroDataFetcher:
 
                 if len(data) > 0:
                     funding_rate = float(data[0]['fundingRate'])
-                    logger.debug(f"📊 Funding Rate ({ticker}): {funding_rate}")
+                    logger.debug(f"Funding Rate ({ticker}): {funding_rate}")
                     return funding_rate
 
         except Exception as e:
-            logger.warning(f"⚠️ Failed to fetch funding rate: {e}")
+            logger.warning(f"Failed to fetch funding rate: {e}")
 
         return None
 
     async def get_spx_data(self) -> Dict[str, Optional[float]]:
         """
-        Get S&P 500 data
-
-        Note: For production, you would use a paid API like Alpha Vantage or Yahoo Finance
-        For now, we'll use placeholder values or free APIs
-
-        Returns:
-            Dict with {spx: float, spx_change_7d: float}
+        Get S&P 500 data via Yahoo Finance free endpoint.
+        Falls back to defaults if unavailable.
         """
-        # Placeholder implementation
-        # In production, integrate with:
-        # - Yahoo Finance API
-        # - Alpha Vantage
-        # - Finnhub
-        # - IEX Cloud
-
         try:
-            # Using a free proxy endpoint (example - may not work in production)
-            # Replace with your preferred financial data API
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=10d"
+            headers = {"User-Agent": "Mozilla/5.0"}
 
-            # For now, return default values
-            logger.debug("📊 Using default SPX values (integrate paid API for production)")
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
 
-            return {
-                'spx': 4500.0,  # Placeholder
-                'spx_change_7d': 0.0  # Placeholder
-            }
+                chart = data.get('chart', {}).get('result', [{}])[0]
+                closes = chart.get('indicators', {}).get('quote', [{}])[0].get('close', [])
+
+                # Filter out None values
+                closes = [c for c in closes if c is not None]
+
+                if len(closes) >= 2:
+                    spx_current = closes[-1]
+                    # Calculate 7d change (or available range)
+                    spx_old = closes[0]
+                    spx_change_7d = (spx_current - spx_old) / spx_old if spx_old else 0.0
+                    logger.debug(f"SPX: {spx_current:.0f}, 7d change: {spx_change_7d:.4f}")
+                    return {'spx': spx_current, 'spx_change_7d': spx_change_7d}
 
         except Exception as e:
-            logger.warning(f"⚠️ Failed to fetch SPX data: {e}")
-            return {'spx': 4500.0, 'spx_change_7d': 0.0}
+            logger.warning(f"Failed to fetch SPX data: {e}")
+
+        return {'spx': None, 'spx_change_7d': None}
 
     async def get_vix_data(self) -> Optional[float]:
-        """
-        Get VIX (Volatility Index) data
-
-        Note: For production, integrate with financial data API
-
-        Returns:
-            VIX value, or None if failed
-        """
-        # Placeholder implementation
-        # In production, integrate with financial data API
-
+        """Get VIX (Volatility Index) via Yahoo Finance"""
         try:
-            logger.debug("📊 Using default VIX value (integrate paid API for production)")
-            return 20.0  # Placeholder
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=2d"
+            headers = {"User-Agent": "Mozilla/5.0"}
+
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+
+                chart = data.get('chart', {}).get('result', [{}])[0]
+                closes = chart.get('indicators', {}).get('quote', [{}])[0].get('close', [])
+                closes = [c for c in closes if c is not None]
+
+                if closes:
+                    vix = closes[-1]
+                    logger.debug(f"VIX: {vix:.2f}")
+                    return vix
 
         except Exception as e:
-            logger.warning(f"⚠️ Failed to fetch VIX data: {e}")
-            return 20.0
+            logger.warning(f"Failed to fetch VIX data: {e}")
+
+        return None
 
     async def get_all_macro_data(self, ticker: str = "BTCUSDT") -> Dict[str, float]:
-        """
-        Get all macro indicators at once
-
-        Args:
-            ticker: Ticker for funding rate
-
-        Returns:
-            Dict with all macro data
-        """
-        logger.info("📊 Fetching macro data...")
+        """Get all macro indicators concurrently"""
+        logger.info("Fetching macro data...")
 
         # Fetch all data concurrently
-        fear_greed_task = self.get_fear_greed_index()
-        funding_rate_task = self.get_funding_rate(ticker)
-        spx_task = self.get_spx_data()
-        vix_task = self.get_vix_data()
-
-        # Wait for all tasks
         fear_greed, funding_rate, spx_data, vix = await asyncio.gather(
-            fear_greed_task,
-            funding_rate_task,
-            spx_task,
-            vix_task,
+            self.get_fear_greed_index(),
+            self.get_funding_rate(ticker),
+            self.get_spx_data(),
+            self.get_vix_data(),
             return_exceptions=True
         )
 
-        # Handle exceptions
+        # Handle exceptions from gather
         if isinstance(fear_greed, Exception):
-            fear_greed = 50.0  # Neutral
+            fear_greed = None
         if isinstance(funding_rate, Exception):
-            funding_rate = 0.0
+            funding_rate = None
         if isinstance(spx_data, Exception):
-            spx_data = {'spx': 4500.0, 'spx_change_7d': 0.0}
+            spx_data = {'spx': None, 'spx_change_7d': None}
         if isinstance(vix, Exception):
-            vix = 20.0
+            vix = None
 
+        # Use explicit None checks (not truthiness) to preserve 0 values
         macro_data = {
-            'fear_greed': fear_greed or 50.0,
-            'funding_rate': funding_rate or 0.0,
-            'spx': spx_data.get('spx', 4500.0),
-            'spx_change_7d': spx_data.get('spx_change_7d', 0.0),
-            'vix': vix or 20.0,
-            'timestamp': datetime.utcnow().isoformat()
+            'fear_greed': fear_greed if fear_greed is not None else 50.0,
+            'funding_rate': funding_rate if funding_rate is not None else 0.0,
+            'spx': spx_data.get('spx') if spx_data.get('spx') is not None else 4500.0,
+            'spx_change_7d': spx_data.get('spx_change_7d') if spx_data.get('spx_change_7d') is not None else 0.0,
+            'vix': vix if vix is not None else 20.0,
+            'timestamp': _utcnow().isoformat()
         }
 
-        logger.success(f"✅ Macro data fetched: Fear&Greed={macro_data['fear_greed']}, VIX={macro_data['vix']}")
+        logger.success(f"Macro data: Fear&Greed={macro_data['fear_greed']}, "
+                       f"SPX={macro_data['spx']:.0f}, VIX={macro_data['vix']:.1f}, "
+                       f"Funding={macro_data['funding_rate']:.6f}")
         return macro_data
 
     def get_all_macro_data_sync(self, ticker: str = "BTCUSDT") -> Dict[str, float]:
         """
-        Synchronous version of get_all_macro_data
-
-        Args:
-            ticker: Ticker for funding rate
-
-        Returns:
-            Dict with all macro data
+        Synchronous wrapper - safe to call from any context.
+        Runs the async method in a separate thread if already in an event loop.
         """
-        return asyncio.run(self.get_all_macro_data(ticker))
+        import concurrent.futures
+
+        def _run_in_new_loop():
+            new_loop = asyncio.new_event_loop()
+            try:
+                return new_loop.run_until_complete(self.get_all_macro_data(ticker))
+            finally:
+                new_loop.close()
+
+        try:
+            asyncio.get_running_loop()
+            # We're inside a running event loop - run in a thread with its own loop
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_run_in_new_loop)
+                return future.result(timeout=30)
+        except RuntimeError:
+            # No event loop running - safe to use asyncio.run()
+            return asyncio.run(self.get_all_macro_data(ticker))
 
 
 # Global instance

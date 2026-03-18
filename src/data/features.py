@@ -113,7 +113,14 @@ class FeatureEngineer:
             DataFrame with all calculated features
         """
         if len(df) < 200:
-            logger.warning(f"⚠️ Not enough data: {len(df)} rows (need 200+)")
+            logger.warning(f"Not enough data: {len(df)} rows (need 200+)")
+            return pd.DataFrame()
+
+        # Validate required input columns
+        required_cols = {'open', 'high', 'low', 'close', 'volume'}
+        missing_cols = required_cols - set(df.columns)
+        if missing_cols:
+            logger.error(f"Missing required columns: {missing_cols}")
             return pd.DataFrame()
 
         df = df.copy()
@@ -131,7 +138,8 @@ class FeatureEngineer:
         if btc_df is not None:
             df = self._calculate_btc_features(df, btc_df)
 
-        # Remove rows with NaN (warm-up period)
+        # Replace any remaining inf/-inf with NaN, then drop NaN rows (warm-up period)
+        df = df.replace([np.inf, -np.inf], np.nan)
         df = df.dropna()
 
         logger.info(f"✅ Features calculated: {len(df)} rows, {len(self.required_features)} features")
@@ -171,37 +179,39 @@ class FeatureEngineer:
 
         # 5. obv_ratio
         df['obv_ma'] = df['obv'].rolling(20).mean()
-        df['obv_ratio'] = df['obv'] / df['obv_ma']
+        df['obv_ratio'] = np.where(df['obv_ma'] != 0, df['obv'] / df['obv_ma'], 1.0)
 
         # 6. hl_ratio
         df['hl_ratio'] = (df['high'] - df['low']) / df['close']
 
         # 7. volume_ratio_20
         df['volume_ma_20'] = df['volume'].rolling(20).mean()
-        df['volume_ratio_20'] = df['volume'] / df['volume_ma_20']
+        df['volume_ratio_20'] = np.where(df['volume_ma_20'] > 0, df['volume'] / df['volume_ma_20'], 1.0)
 
         # 8. stoch_k (Stochastic Oscillator)
         low_14 = df['low'].rolling(14).min()
         high_14 = df['high'].rolling(14).max()
-        df['stoch_k'] = 100 * (df['close'] - low_14) / (high_14 - low_14)
+        stoch_denom = high_14 - low_14
+        df['stoch_k'] = np.where(stoch_denom > 0, 100 * (df['close'] - low_14) / stoch_denom, 50.0)
 
-        # 9. lower_shadow_ratio
+        # 9. lower_shadow_ratio (protected against high == low doji candles)
+        hl_range = df['high'] - df['low']
         df['lower_shadow'] = df[['open', 'close']].min(axis=1) - df['low']
-        df['lower_shadow_ratio'] = df['lower_shadow'] / (df['high'] - df['low'])
+        df['lower_shadow_ratio'] = np.where(hl_range > 0, df['lower_shadow'] / hl_range, 0.0)
 
         # 10. upper_shadow_ratio
         df['upper_shadow'] = df['high'] - df[['open', 'close']].max(axis=1)
-        df['upper_shadow_ratio'] = df['upper_shadow'] / (df['high'] - df['low'])
+        df['upper_shadow_ratio'] = np.where(hl_range > 0, df['upper_shadow'] / hl_range, 0.0)
 
         # 11. bullish_candles_3d
         df['is_bullish'] = (df['close'] > df['open']).astype(int)
         df['bullish_candles_3d'] = df['is_bullish'].rolling(3).sum()
 
         # 12. body_ratio
-        df['body_ratio'] = abs(df['close'] - df['open']) / (df['high'] - df['low'])
+        df['body_ratio'] = np.where(hl_range > 0, abs(df['close'] - df['open']) / hl_range, 0.0)
 
         # 13. close_position (where close is in the H-L range)
-        df['close_position'] = (df['close'] - df['low']) / (df['high'] - df['low'])
+        df['close_position'] = np.where(hl_range > 0, (df['close'] - df['low']) / hl_range, 0.5)
 
         # 14. body_trend (cumulative sum of body direction)
         df['body_direction'] = np.sign(df['close'] - df['open'])
@@ -227,7 +237,7 @@ class FeatureEngineer:
         # 19. volume_trend_ratio
         df['volume_ma_5'] = df['volume'].rolling(5).mean()
         df['volume_ma_20'] = df['volume'].rolling(20).mean()
-        df['volume_trend_ratio'] = df['volume_ma_5'] / df['volume_ma_20']
+        df['volume_trend_ratio'] = np.where(df['volume_ma_20'] > 0, df['volume_ma_5'] / df['volume_ma_20'], 1.0)
 
         # 20. volume_acceleration
         df['volume_change'] = (df['volume'] - df['volume'].shift(3)) / df['volume'].shift(3)
@@ -240,7 +250,7 @@ class FeatureEngineer:
         # 22. hl_compression
         df['hl_range_3d'] = (df['high'] - df['low']).rolling(3).mean()
         df['hl_range_20d'] = (df['high'] - df['low']).rolling(20).mean()
-        df['hl_compression'] = df['hl_range_3d'] / df['hl_range_20d']
+        df['hl_compression'] = np.where(df['hl_range_20d'] > 0, df['hl_range_3d'] / df['hl_range_20d'], 1.0)
 
         # 23-24. green_candles (5d, 10d)
         df['green_candles_5d'] = df['is_bullish'].rolling(5).sum()
@@ -253,7 +263,8 @@ class FeatureEngineer:
         # 27. price_position_20d (where current price sits in 20d range)
         low_20 = df['low'].rolling(20).min()
         high_20 = df['high'].rolling(20).max()
-        df['price_position_20d'] = (df['close'] - low_20) / (high_20 - low_20)
+        range_20d = high_20 - low_20
+        df['price_position_20d'] = np.where(range_20d > 0, (df['close'] - low_20) / range_20d, 0.5)
 
         # 28. momentum_strength (average of momentums)
         df['momentum_strength'] = (df['momentum_3d'] + df['momentum_5d'] + df['momentum_7d']) / 3
@@ -261,7 +272,7 @@ class FeatureEngineer:
         # 29. body_trend_ratio
         df['body_size'] = abs(df['close'] - df['open'])
         df['body_size_ma'] = df['body_size'].rolling(5).mean()
-        df['body_trend_ratio'] = df['body_size'] / df['body_size_ma']
+        df['body_trend_ratio'] = np.where(df['body_size_ma'] > 0, df['body_size'] / df['body_size_ma'], 1.0)
 
         return df
 
@@ -286,7 +297,7 @@ class FeatureEngineer:
         # 33. volume_explosion_ratio (max_vol_3d / avg_vol_20d)
         df['max_vol_3d'] = df['volume'].rolling(3).max()
         df['avg_vol_20d'] = df['volume'].rolling(20).mean()
-        df['volume_explosion_ratio'] = df['max_vol_3d'] / df['avg_vol_20d']
+        df['volume_explosion_ratio'] = np.where(df['avg_vol_20d'] > 0, df['max_vol_3d'] / df['avg_vol_20d'], 1.0)
 
         # 34. momentum_vs_btc_3d (will be calculated in _calculate_btc_features)
         # Placeholder for now
@@ -299,12 +310,12 @@ class FeatureEngineer:
         # 36. volatility_spike_ratio (ATR_3d / ATR_30d)
         df['atr_3'] = df['tr'].rolling(3).mean()
         df['atr_30'] = df['tr'].rolling(30).mean()
-        df['volatility_spike_ratio'] = df['atr_3'] / df['atr_30']
+        df['volatility_spike_ratio'] = np.where(df['atr_30'] > 0, df['atr_3'] / df['atr_30'], 1.0)
 
         # 37. hl_expansion_rate (rate of change of H-L range)
         df['hl_range'] = df['high'] - df['low']
-        df['hl_range_change'] = (df['hl_range'] - df['hl_range'].shift(5)) / df['hl_range'].shift(5)
-        df['hl_expansion_rate'] = df['hl_range_change']
+        hl_range_shifted = df['hl_range'].shift(5)
+        df['hl_expansion_rate'] = np.where(hl_range_shifted > 0, (df['hl_range'] - hl_range_shifted) / hl_range_shifted, 0.0)
 
         return df
 

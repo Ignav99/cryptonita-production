@@ -17,7 +17,7 @@ from config import settings
 from src.data.storage.db_manager import DatabaseManager
 
 CREATE_TABLES_SQL = """
--- Crypto prices table (existing)
+-- Crypto prices table
 CREATE TABLE IF NOT EXISTS crypto_prices (
     id SERIAL PRIMARY KEY,
     timestamp TIMESTAMPTZ NOT NULL,
@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS crypto_prices (
     high NUMERIC NOT NULL,
     low NUMERIC NOT NULL,
     close NUMERIC NOT NULL,
-    volume BIGINT NOT NULL,
+    volume NUMERIC NOT NULL,
     UNIQUE(timestamp, ticker)
 );
 
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS signals (
     ticker VARCHAR(20) NOT NULL,
     signal_type VARCHAR(10) NOT NULL,
     probability NUMERIC NOT NULL,
-    features TEXT,
+    features JSONB,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT check_signal_type CHECK (signal_type IN ('BUY', 'SELL', 'HOLD'))
 );
@@ -50,7 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_signals_ticker ON signals(ticker);
 -- Trades execution table
 CREATE TABLE IF NOT EXISTS trades (
     id SERIAL PRIMARY KEY,
-    signal_id INTEGER REFERENCES signals(id),
+    signal_id INTEGER REFERENCES signals(id) ON DELETE SET NULL,
     ticker VARCHAR(20) NOT NULL,
     action VARCHAR(10) NOT NULL,
     quantity NUMERIC NOT NULL,
@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS trades (
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     executed_at TIMESTAMPTZ,
+    pnl NUMERIC,
     error_message TEXT,
     CONSTRAINT check_action CHECK (action IN ('BUY', 'SELL')),
     CONSTRAINT check_status CHECK (status IN ('pending', 'executed', 'failed', 'cancelled'))
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS trades (
 CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_trades_ticker ON trades(ticker);
 CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
+CREATE INDEX IF NOT EXISTS idx_trades_signal_id ON trades(signal_id);
 
 -- Bot status table (singleton - only one row)
 CREATE TABLE IF NOT EXISTS bot_status (
@@ -86,20 +88,35 @@ INSERT INTO bot_status (id, status, total_signals, buy_signals, cycle_number, la
 VALUES (1, 'idle', 0, 0, 0, NOW())
 ON CONFLICT (id) DO NOTHING;
 
--- Portfolio positions table
+-- Portfolio positions table (full state for recovery)
 CREATE TABLE IF NOT EXISTS positions (
     id SERIAL PRIMARY KEY,
     ticker VARCHAR(20) NOT NULL UNIQUE,
     quantity NUMERIC NOT NULL,
+    remaining_quantity NUMERIC NOT NULL,
     avg_buy_price NUMERIC NOT NULL,
     current_price NUMERIC,
     total_value NUMERIC,
     pnl NUMERIC,
     pnl_percentage NUMERIC,
+    stop_loss NUMERIC,
+    tp1 NUMERIC,
+    tp1_hit BOOLEAN DEFAULT FALSE,
+    tp1_size NUMERIC,
+    tp2 NUMERIC,
+    tp2_hit BOOLEAN DEFAULT FALSE,
+    tp2_size NUMERIC,
+    tp3 NUMERIC,
+    tp3_hit BOOLEAN DEFAULT FALSE,
+    tp3_size NUMERIC,
+    atr_pct NUMERIC,
+    trailing_stop_enabled BOOLEAN DEFAULT FALSE,
+    trailing_stop_active BOOLEAN DEFAULT FALSE,
+    oco_order_id VARCHAR(50),
+    trade_id INTEGER REFERENCES trades(id) ON DELETE SET NULL,
+    entry_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_update TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-CREATE INDEX IF NOT EXISTS idx_positions_ticker ON positions(ticker);
 
 -- Performance metrics table (daily snapshots)
 CREATE TABLE IF NOT EXISTS performance_metrics (

@@ -5,10 +5,19 @@ CRYPTONITA TRADING BOT - LAUNCHER
 Launch the trading bot with proper logging and error handling
 """
 
+import signal
 import sys
 import asyncio
 from pathlib import Path
 from loguru import logger
+
+
+def handle_sigterm(signum, frame):
+    """Convert SIGTERM into KeyboardInterrupt for graceful shutdown."""
+    raise KeyboardInterrupt()
+
+
+signal.signal(signal.SIGTERM, handle_sigterm)
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent

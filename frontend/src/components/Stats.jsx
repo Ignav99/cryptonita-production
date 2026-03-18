@@ -26,13 +26,13 @@ const Stats = ({ stats }) => {
     {
       title: 'Win Rate',
       value: `${stats.win_rate?.toFixed(1) || '0.0'}%`,
-      subtitle: `${stats.winning_trades || 0} / ${stats.total_trades || 0} trades`,
+      subtitle: `${stats.winning_trades || 0} / ${stats.closed_trades || 0} trades`,
       icon: Target,
       color: stats.win_rate >= 50 ? 'green' : 'red',
     },
     {
       title: 'Open Positions',
-      value: stats.open_positions || 0,
+      value: stats.active_positions || 0,
       subtitle: `Max: ${stats.max_positions || 10}`,
       icon: BarChart3,
       color: 'blue',

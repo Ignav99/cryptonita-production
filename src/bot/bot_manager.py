@@ -4,6 +4,7 @@ BOT PROCESS MANAGER
 Manage bot process lifecycle (start, stop, status)
 """
 
+import asyncio
 import os
 import signal
 import subprocess
@@ -116,11 +117,18 @@ class BotManager:
             }
 
         try:
+            # Redirect stdout/stderr to log files instead of PIPE
+            # (PIPE can cause the child process to hang when the buffer fills)
+            log_dir = Path("logs")
+            log_dir.mkdir(exist_ok=True)
+            stdout_file = open(log_dir / "bot_stdout.log", "a")
+            stderr_file = open(log_dir / "bot_stderr.log", "a")
+
             # Start bot process in background
             process = subprocess.Popen(
                 ["python3", str(self.bot_script)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=stdout_file,
+                stderr=stderr_file,
                 start_new_session=True,  # Detach from parent
                 cwd=str(self.bot_script.parent.parent)
             )
@@ -203,9 +211,12 @@ class BotManager:
                 "message": f"Failed to stop bot: {str(e)}"
             }
 
-    def restart(self, mode: str = "auto") -> Dict:
+    async def async_restart(self, mode: str = "auto") -> Dict:
         """
-        Restart the trading bot
+        Restart the trading bot (non-blocking async version).
+
+        Use this when calling from an async context (e.g. API route handlers)
+        to avoid blocking the event loop.
 
         Args:
             mode: Trading mode
@@ -222,9 +233,45 @@ class BotManager:
                 "message": "Failed to stop bot for restart"
             }
 
-        # Wait a bit
-        import time
-        time.sleep(2)
+        # Non-blocking wait before restarting
+        await asyncio.sleep(2)
+
+        # Start again
+        return self.start(mode=mode)
+
+    def restart(self, mode: str = "auto") -> Dict:
+        """
+        Restart the trading bot (synchronous version).
+
+        Prefer async_restart() when calling from an async context.
+
+        Args:
+            mode: Trading mode
+
+        Returns:
+            Dict with success status and message
+        """
+        # Stop first
+        stop_result = self.stop(reason="Restart requested")
+
+        if not stop_result["success"] and self.is_running():
+            return {
+                "success": False,
+                "message": "Failed to stop bot for restart"
+            }
+
+        # If an event loop is already running, schedule non-blocking sleep;
+        # otherwise fall back to synchronous sleep.
+        try:
+            loop = asyncio.get_running_loop()
+            # We are inside an async context -- delegate to async_restart
+            import concurrent.futures
+            future = asyncio.run_coroutine_threadsafe(asyncio.sleep(2), loop)
+            future.result(timeout=5)
+        except RuntimeError:
+            # No running event loop; safe to block
+            import time
+            time.sleep(2)
 
         # Start again
         return self.start(mode=mode)

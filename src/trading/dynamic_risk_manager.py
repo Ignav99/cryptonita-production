@@ -29,11 +29,14 @@ class DynamicRiskManager:
         self.base_tp_pct = settings.TAKE_PROFIT_PCT  # 0.15 (15%)
         self.base_sl_pct = settings.STOP_LOSS_PCT    # 0.05 (5%)
 
-        # Niveles de Take Profit parcial
+        # Niveles de Take Profit parcial (fractions of REMAINING quantity)
+        # TP1: sell 30% of remaining (30% of original)
+        # TP2: sell 50% of remaining (35% of original)
+        # TP3: sell 100% of remaining (35% of original) - close entire position
         self.tp_levels = [
-            {'name': 'TP1', 'pct': 0.10, 'size': 0.30},  # 30% a +10%
-            {'name': 'TP2', 'pct': 0.20, 'size': 0.40},  # 40% a +20%
-            {'name': 'TP3', 'pct': 0.40, 'size': 0.30},  # 30% a +40%
+            {'name': 'TP1', 'pct': 0.10, 'size': 0.30},
+            {'name': 'TP2', 'pct': 0.20, 'size': 0.50},
+            {'name': 'TP3', 'pct': 0.40, 'size': 1.00},
         ]
 
         # Configuración de Trailing Stop Loss
@@ -358,13 +361,12 @@ class DynamicRiskManager:
                 'level': 'TP2'
             }
 
-        # TP3
+        # TP3 - exit all remaining
         if current_price >= tp_levels['tp3'] and not tp_levels.get('tp3_hit', False):
-            quantity = position_size * tp_levels['tp3_size']
             return {
-                'action': 'exit_partial',
+                'action': 'exit_full',
                 'reason': 'tp3_hit',
-                'quantity': quantity,
+                'quantity': position_size,
                 'price': tp_levels['tp3'],
                 'level': 'TP3'
             }

@@ -48,7 +48,7 @@ const Positions = ({ positions }) => {
                   </td>
 
                   <td>
-                    <span className="font-mono text-sm">${position.entry_price?.toFixed(4)}</span>
+                    <span className="font-mono text-sm">${position.avg_buy_price?.toFixed(4)}</span>
                   </td>
 
                   <td>
@@ -85,7 +85,7 @@ const Positions = ({ positions }) => {
                   <td>
                     <div className="text-xs text-gray-600">
                       <div>
-                        TP: ${position.take_profit?.toFixed(4)}
+                        TP: ${position.tp1?.toFixed(4)}
                       </div>
                       <div>
                         SL: ${position.stop_loss?.toFixed(4)}

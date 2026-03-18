@@ -13,6 +13,8 @@ class DashboardStats(BaseModel):
     portfolio_value: float
     total_pnl: float
     win_rate: float
+    winning_trades: int
+    closed_trades: int
     timestamp: str
 
 
@@ -24,6 +26,15 @@ class Position(BaseModel):
     total_value: Optional[float]
     pnl: Optional[float]
     pnl_percentage: Optional[float]
+    remaining_quantity: Optional[float]
+    stop_loss: Optional[float]
+    tp1: Optional[float]
+    tp1_hit: Optional[bool]
+    tp2: Optional[float]
+    tp2_hit: Optional[bool]
+    tp3: Optional[float]
+    tp3_hit: Optional[bool]
+    entry_time: Optional[datetime]
     last_update: datetime
 
 
