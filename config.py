@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     DB_NAME: str = Field(..., env="DB_NAME")
 
     # ============================================
+    # REDIS
+    # ============================================
+    REDIS_URL: str = Field(default="redis://localhost:6379/0", env="REDIS_URL")
+
+    # ============================================
     # BINANCE API
     # ============================================
     TRADING_MODE: str = Field(default="testnet", env="TRADING_MODE")  # testnet or production
@@ -57,16 +62,19 @@ class Settings(BaseSettings):
     MAX_POSITION_SIZE_USD: float = Field(default=500.0, env="MAX_POSITION_SIZE_USD")
     MAX_DAILY_LOSS_USD: float = Field(default=200.0, env="MAX_DAILY_LOSS_USD")
     MAX_TOTAL_RISK_PERCENT: float = Field(default=2.0, env="MAX_TOTAL_RISK_PERCENT")
-    REQUIRE_MANUAL_APPROVAL: bool = Field(default=False, env="REQUIRE_MANUAL_APPROVAL")
+    REQUIRE_MANUAL_APPROVAL: bool = Field(default=True, env="REQUIRE_MANUAL_APPROVAL")
 
     # Model thresholds from V3 config
-    PREDICTION_THRESHOLD: float = Field(default=0.60, env="PREDICTION_THRESHOLD")
+    # NOTE: Increased from 0.95 to 0.97 after analysis showed too many high-confidence
+    # predictions (28 in 7 days). This should reduce false positives and give
+    # approximately 1-2 signals per day instead of 4+.
+    PREDICTION_THRESHOLD: float = 0.97  # 97% confidence threshold (more conservative)
     POSITION_SIZE_PCT: float = 0.10  # 10% of capital per position
     MAX_POSITION_SIZE_PCT: float = 0.15  # Max 15% per position
     TAKE_PROFIT_PCT: float = 0.15  # 15% take profit
     STOP_LOSS_PCT: float = 0.05  # 5% stop loss
     MAX_PORTFOLIO_RISK_PCT: float = 0.30  # 30% max portfolio risk
-    MAX_POSITIONS: int = Field(default=10, env="MAX_POSITIONS")
+    MAX_POSITIONS: int = 10  # Max 10 simultaneous positions
 
     # ============================================
     # SUPPORTED TICKERS (Altcoins volátiles para pumps +20%)
@@ -131,17 +139,17 @@ class Settings(BaseSettings):
     # ============================================
     # API CONFIGURATION
     # ============================================
-    API_HOST: str = Field(default="0.0.0.0", env="API_HOST")
-    API_PORT: int = Field(default=8000, env="API_PORT")
-    API_WORKERS: int = Field(default=4, env="API_WORKERS")
+    API_HOST: str = "0.0.0.0"
+    API_PORT: int = 8000
+    API_WORKERS: int = 4
 
     # JWT Authentication
     SECRET_KEY: str = Field(
         default="your-secret-key-change-in-production-please-use-strong-key-here",
         env="SECRET_KEY"
     )
-    ALGORITHM: str = Field(default="HS256", env="ALGORITHM")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=1440, env="ACCESS_TOKEN_EXPIRE_MINUTES")
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
     class Config:
         env_file = ".env"

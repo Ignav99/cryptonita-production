@@ -46,6 +46,7 @@ FRONTEND_DIST = FRONTEND_DIR / "dist"
 if FRONTEND_DIST.exists() and (FRONTEND_DIST / "static").exists():
     try:
         app.mount("/static", StaticFiles(directory=str(FRONTEND_DIST / "static")), name="static")
+        app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "static")), name="assets")
         logger.info(f"✅ Frontend assets mounted from {FRONTEND_DIST / 'static'}")
     except Exception as e:
         logger.warning(f"⚠️ Could not mount frontend assets: {e}")

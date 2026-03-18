@@ -1,16 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, LayoutDashboard, BarChart3 } from 'lucide-react';
 import { dashboard } from '../api/client';
 import useWebSocket from '../hooks/useWebSocket';
 import Stats from './Stats';
 import BotControls from './BotControls';
 import Positions from './Positions';
+import ClosedPositions from './ClosedPositions';
 import Signals from './Signals';
 import Trades from './Trades';
+import Analysis from './Analysis';
 
 const Dashboard = () => {
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [stats, setStats] = useState(null);
   const [positions, setPositions] = useState([]);
+  const [closedPositions, setClosedPositions] = useState([]);
   const [signals, setSignals] = useState([]);
   const [trades, setTrades] = useState([]);
   const [botStatus, setBotStatus] = useState(null);
@@ -23,10 +27,11 @@ const Dashboard = () => {
   // Fetch all data
   const fetchData = async () => {
     try {
-      const [statsData, positionsData, signalsData, tradesData, statusData] =
+      const [statsData, positionsData, closedData, signalsData, tradesData, statusData] =
         await Promise.all([
           dashboard.getStats(),
           dashboard.getPositions(),
+          dashboard.getClosedPositions(50),
           dashboard.getSignals(50),
           dashboard.getTrades(50),
           dashboard.getBotStatus(),
@@ -34,6 +39,7 @@ const Dashboard = () => {
 
       setStats(statsData);
       setPositions(positionsData);
+      setClosedPositions(closedData);
       setSignals(signalsData);
       setTrades(tradesData);
       setBotStatus(statusData);
@@ -134,37 +140,70 @@ const Dashboard = () => {
               </span>
             </div>
           </div>
+
+          {/* Tab Navigation */}
+          <div className="flex gap-1 mt-4">
+            <button
+              onClick={() => setActiveTab('dashboard')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-t-lg font-medium transition-colors ${
+                activeTab === 'dashboard'
+                  ? 'bg-gray-50 text-blue-600 border-t border-l border-r border-gray-200'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              Dashboard
+            </button>
+            <button
+              onClick={() => setActiveTab('analysis')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-t-lg font-medium transition-colors ${
+                activeTab === 'analysis'
+                  ? 'bg-gray-50 text-blue-600 border-t border-l border-r border-gray-200'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4" />
+              Analysis
+            </button>
+          </div>
         </div>
       </header>
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="space-y-6">
-          {/* Stats Cards */}
-          <Stats stats={stats} />
+        {activeTab === 'dashboard' ? (
+          <div className="space-y-6">
+            {/* Stats Cards */}
+            <Stats stats={stats} />
 
-          {/* Bot Controls + Positions */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Bot Controls */}
-            <div className="lg:col-span-1">
-              <BotControls botStatus={botStatus} onStatusChange={fetchData} />
+            {/* Bot Controls + Positions */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Bot Controls */}
+              <div className="lg:col-span-1">
+                <BotControls botStatus={botStatus} onStatusChange={fetchData} />
+              </div>
+
+              {/* Positions */}
+              <div className="lg:col-span-2">
+                <Positions positions={positions} />
+              </div>
             </div>
 
-            {/* Positions */}
-            <div className="lg:col-span-2">
-              <Positions positions={positions} />
+            {/* Closed Positions */}
+            <ClosedPositions closedPositions={closedPositions} />
+
+            {/* Signals + Trades */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Recent Signals */}
+              <Signals signals={signals} limit={10} />
+
+              {/* Trade History */}
+              <Trades trades={trades} limit={20} />
             </div>
           </div>
-
-          {/* Signals + Trades */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Recent Signals */}
-            <Signals signals={signals} limit={10} />
-
-            {/* Trade History */}
-            <Trades trades={trades} limit={20} />
-          </div>
-        </div>
+        ) : (
+          <Analysis />
+        )}
       </main>
 
       {/* Footer */}

@@ -11,7 +11,10 @@ class DashboardStats(BaseModel):
     executed_trades: int
     active_positions: int
     portfolio_value: float
+    usdt_balance: float
+    positions_value: float
     total_pnl: float
+    total_pnl_pct: float
     win_rate: float
     winning_trades: int
     closed_trades: int
@@ -80,3 +83,27 @@ class PerformanceMetric(BaseModel):
     sharpe_ratio: Optional[float]
     max_drawdown: Optional[float]
     portfolio_value: float
+
+
+class SignalPerformance(BaseModel):
+    ticker: str
+    signal_date: str
+    probability: float
+    entry_price: float
+    max_price: float
+    max_return_pct: float
+    hit_20pct: bool
+    days_available: int
+
+
+class SignalAnalysisSummary(BaseModel):
+    total_signals: int
+    hit_rate: float
+    avg_return: float
+    mature_signals: int
+    mature_hit_rate: float
+    mature_avg_return: float
+    by_probability: list
+    recent_signals: list
+    best_signals: list
+    worst_signals: list

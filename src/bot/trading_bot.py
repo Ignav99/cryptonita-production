@@ -3,17 +3,17 @@ CRYPTONITA TRADING BOT V3
 ==========================
 Main trading bot implementation with:
 - Market scanning every 12 hours
-- Position monitoring every 5 minutes
+- Position monitoring every 15 minutes
 - Automatic trade execution
-- Risk management with dynamic TP/SL
-- Full position persistence and recovery
-- Daily loss tracking
+- Risk management
+- Database logging
 """
 
 import json
 import asyncio
+import time
 from pathlib import Path
-from datetime import datetime, timezone, date, timedelta
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from loguru import logger
 import pandas as pd
@@ -26,24 +26,29 @@ from src.data.macro_data import MacroDataFetcher
 from src.trading.dynamic_risk_manager import DynamicRiskManager
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 class TradingBot:
-    """Main trading bot for automated cryptocurrency trading"""
+    """
+    Main trading bot for automated cryptocurrency trading
+    """
 
     def __init__(self, config_path: str = "bot_config.json"):
+        """
+        Initialize trading bot
+
+        Args:
+            config_path: Path to bot configuration file
+        """
         logger.info("=" * 60)
-        logger.info("INITIALIZING CRYPTONITA TRADING BOT V3")
+        logger.info("🤖 INITIALIZING CRYPTONITA TRADING BOT V3")
         logger.info("=" * 60)
 
         # Load configuration
         self.config = self._load_config(config_path)
+        self.production_config = self._load_production_config()
 
         # Initialize services
-        self.binance = BinanceService()
-        self.binance_data = BinanceDataService()
+        self.binance = BinanceService()  # For trading (testnet)
+        self.binance_data = BinanceDataService()  # For historical data (production, read-only)
 
         # Select predictor based on V4 flag
         if getattr(settings, 'USE_V4_MODEL', False):
@@ -57,20 +62,15 @@ class TradingBot:
 
         self.db = DatabaseManager(settings.get_database_url())
         self.macro_fetcher = MacroDataFetcher()
-        self.risk_manager = DynamicRiskManager()
+        self.risk_manager = DynamicRiskManager()  # Dynamic TP/SL management
 
-        logger.info("Using Binance PRODUCTION for data, TESTNET for trading")
+        logger.info("💡 Using Binance PRODUCTION for data, TESTNET for trading")
 
         # Bot state
         self.is_running = False
         self.cycle_number = 0
-        self.last_scan_time = None
-
-        # Daily loss tracking
         self.daily_loss = 0.0
-        self._daily_loss_date = _utcnow().date()
-
-        # Positions - will be loaded from DB on start
+        self.last_scan_time = None
         self.positions: Dict[str, Dict] = {}
 
         # Trading parameters from config
@@ -78,26 +78,52 @@ class TradingBot:
         self.position_monitoring_minutes = self.config['trading']['position_monitoring_minutes']
         self.auto_trading = self.config['trading']['auto_trading_enabled']
 
-        logger.success("Trading Bot initialized successfully")
+        logger.success("✅ Trading Bot initialized successfully")
         self._log_configuration()
 
     def _load_config(self, config_path: str) -> dict:
         """Load bot configuration"""
         try:
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-            logger.info(f"Bot config loaded from {config_path}")
-            return config
-        except FileNotFoundError:
-            logger.warning(f"Config file not found: {config_path}, using defaults")
+            # Try relative path first
+            config_file = Path(config_path)
+
+            # If not found, try from project root
+            if not config_file.exists():
+                project_root = Path(__file__).parent.parent.parent
+                config_file = project_root / config_path
+
+            if config_file.exists():
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                logger.info(f"📄 Bot config loaded from {config_file}")
+                return config
+            else:
+                logger.warning(f"⚠️ Config file not found: {config_path}, using defaults")
+                return self._default_config()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load config: {e}, using defaults")
             return self._default_config()
 
+    def _load_production_config(self) -> dict:
+        """Load production system configuration"""
+        try:
+            config_path = Path(settings.MASTER_CONFIG_FILE)
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+            logger.info("📄 Production config loaded")
+            return config
+        except Exception as e:
+            logger.error(f"❌ Failed to load production config: {e}")
+            return {}
+
     def _default_config(self) -> dict:
+        """Return default configuration"""
         return {
             "trading": {
                 "scan_interval_hours": 12,
-                "position_monitoring_minutes": 5,
+                "position_monitoring_minutes": 15,
                 "auto_trading_enabled": True,
+                "require_manual_approval": False
             },
             "risk_management": {
                 "max_positions": 10,
@@ -106,58 +132,58 @@ class TradingBot:
         }
 
     def _log_configuration(self):
-        logger.info("BOT CONFIGURATION:")
-        logger.info(f"  Scan Interval: {self.scan_interval_hours}h")
-        logger.info(f"  Position Monitoring: {self.position_monitoring_minutes}min")
-        logger.info(f"  Auto Trading: {self.auto_trading}")
-        logger.info(f"  Trading Mode: {settings.TRADING_MODE}")
-        logger.info(f"  Max Positions: {settings.MAX_POSITIONS}")
-        logger.info(f"  Threshold: {settings.PREDICTION_THRESHOLD}")
-        logger.info(f"  Position Size: {settings.POSITION_SIZE_PCT * 100}%")
-        logger.info(f"  Max Daily Loss: ${settings.MAX_DAILY_LOSS_USD}")
+        """Log current configuration"""
+        logger.info("⚙️ BOT CONFIGURATION:")
+        logger.info(f"  - Scan Interval: {self.scan_interval_hours} hours")
+        logger.info(f"  - Position Monitoring: {self.position_monitoring_minutes} minutes")
+        logger.info(f"  - Auto Trading: {self.auto_trading}")
+        logger.info(f"  - Trading Mode: {settings.TRADING_MODE}")
+        logger.info(f"  - Max Positions: {settings.MAX_POSITIONS}")
+        logger.info(f"  - Prediction Threshold: {settings.PREDICTION_THRESHOLD}")
+        logger.info(f"  - Position Size: {settings.POSITION_SIZE_PCT * 100}%")
+        logger.info(f"  - Take Profit: {settings.TAKE_PROFIT_PCT * 100}%")
+        logger.info(f"  - Stop Loss: {settings.STOP_LOSS_PCT * 100}%")
 
-    # ============================================
-    # DAILY LOSS TRACKING
-    # ============================================
-
-    def _check_daily_reset(self):
-        """Reset daily loss counter if a new day has started"""
-        today = _utcnow().date()
-        if today != self._daily_loss_date:
-            logger.info(f"New trading day. Previous day loss: ${self.daily_loss:.2f}")
-            self.daily_loss = 0.0
-            self._daily_loss_date = today
-
-    def _record_loss(self, loss_amount: float):
-        """Record a loss (positive number = loss amount)"""
-        if loss_amount > 0:
-            self.daily_loss += loss_amount
-            logger.warning(f"Daily loss updated: ${self.daily_loss:.2f} / ${settings.MAX_DAILY_LOSS_USD}")
-
-    def _can_trade(self) -> bool:
-        """Check if daily loss limit allows trading"""
-        self._check_daily_reset()
-        if self.daily_loss >= settings.MAX_DAILY_LOSS_USD:
-            logger.warning(f"Daily loss limit reached: ${self.daily_loss:.2f} >= ${settings.MAX_DAILY_LOSS_USD}")
-            return False
-        return True
-
-    # ============================================
-    # POSITION RECOVERY
-    # ============================================
-
-    def _recover_positions(self):
-        """Load open positions from database on startup"""
+    def _save_prices_to_db(self, tickers_data: Dict[str, pd.DataFrame]):
+        """
+        Mantiene la BD con exactamente 1 año de datos:
+        1. Borra el día más antiguo (cola)
+        2. Añade el día nuevo (cabeza)
+        """
         try:
-            recovered = self.db.get_all_positions_as_dict()
-            if recovered:
-                self.positions = recovered
-                logger.success(f"Recovered {len(recovered)} positions from database: {list(recovered.keys())}")
-            else:
-                logger.info("No open positions to recover")
+            # 1. Borrar el día más antiguo
+            self.db.execute_query("""
+                DELETE FROM crypto_prices
+                WHERE timestamp = (SELECT MIN(timestamp) FROM crypto_prices)
+            """, {})
+            logger.debug("🗑️ Eliminado día más antiguo de crypto_prices")
+
+            # 2. Extraer solo el último día de cada ticker
+            all_data = []
+            for ticker, df in tickers_data.items():
+                if df is None or len(df) == 0:
+                    continue
+
+                ticker_df = df.copy()
+                ticker_df['timestamp'] = pd.to_datetime(ticker_df['timestamp'])
+
+                # Solo el último registro (día más reciente)
+                latest = ticker_df.iloc[[-1]].copy()
+                latest['ticker'] = ticker
+                latest = latest[['timestamp', 'ticker', 'open', 'high', 'low', 'close', 'volume']]
+                all_data.append(latest)
+
+            if not all_data:
+                return
+
+            combined_df = pd.concat(all_data, ignore_index=True)
+
+            # 3. Insertar el día nuevo
+            self.db.save_crypto_prices(combined_df)
+            logger.info(f"💾 Añadido día nuevo: {len(combined_df)} tickers")
+
         except Exception as e:
-            logger.error(f"Failed to recover positions: {e}")
-            self.positions = {}
+            logger.warning(f"⚠️ Error actualizando crypto_prices: {e}")
 
     # ============================================
     # MAIN BOT LOOP
@@ -165,15 +191,12 @@ class TradingBot:
 
     async def start(self):
         """Start the trading bot"""
-        logger.info("Starting trading bot...")
+        logger.info("🚀 Starting trading bot...")
 
         # Test Binance connection
         if not self.binance.test_connectivity():
-            logger.error("Failed to connect to Binance. Aborting.")
+            logger.error("❌ Failed to connect to Binance. Aborting.")
             return
-
-        # Recover positions from DB
-        self._recover_positions()
 
         # Update bot status
         self.db.update_bot_status(
@@ -189,25 +212,28 @@ class TradingBot:
         # Start background tasks
         tasks = [
             asyncio.create_task(self._market_scan_loop()),
-            asyncio.create_task(self._position_monitoring_loop())
+            asyncio.create_task(self._position_monitoring_loop()),
+            asyncio.create_task(self._binance_sync_loop())
         ]
 
-        logger.success("Trading bot started successfully")
+        logger.success("✅ Trading bot started successfully")
 
         try:
             await asyncio.gather(*tasks)
         except KeyboardInterrupt:
-            logger.info("Keyboard interrupt received")
+            logger.info("⏸️ Keyboard interrupt received")
             await self.stop()
         except Exception as e:
-            logger.error(f"Bot error: {e}")
+            logger.error(f"❌ Bot error: {e}")
             await self.stop()
 
     async def stop(self):
-        """Stop the trading bot gracefully"""
-        logger.info("Stopping trading bot...")
+        """Stop the trading bot"""
+        logger.info("🛑 Stopping trading bot...")
+
         self.is_running = False
 
+        # Update bot status
         self.db.update_bot_status(
             status='stopped',
             total_signals=0,
@@ -216,65 +242,53 @@ class TradingBot:
             last_error=None
         )
 
-        logger.success("Trading bot stopped")
+        logger.success("✅ Trading bot stopped")
 
     # ============================================
     # MARKET SCANNING (every 12 hours)
     # ============================================
 
-    def _is_paused(self) -> bool:
-        """Check if bot is paused via DB status"""
-        try:
-            status = self.db.get_bot_status()
-            return status.get('status') == 'paused'
-        except Exception:
-            return False
-
     async def _market_scan_loop(self):
         """Main loop for scanning market and finding new opportunities"""
-        logger.info(f"Market scan loop started (interval: {self.scan_interval_hours}h)")
+        logger.info(f"🔍 Market scan loop started (interval: {self.scan_interval_hours}h)")
 
         while self.is_running:
             try:
-                if self._is_paused():
-                    logger.info("Bot is paused - skipping market scan")
-                    await asyncio.sleep(60)
-                    continue
-
+                # Run market scan
                 await self._scan_market()
 
+                # Wait for next scan interval
                 wait_seconds = self.scan_interval_hours * 3600
-                logger.info(f"Next scan in {self.scan_interval_hours} hours...")
+                logger.info(f"⏰ Next scan in {self.scan_interval_hours} hours...")
 
+                # Sleep in small chunks to allow for shutdown
                 for _ in range(int(wait_seconds / 60)):
                     if not self.is_running:
                         break
                     await asyncio.sleep(60)
 
             except Exception as e:
-                logger.error(f"Error in market scan loop: {e}")
-                await asyncio.sleep(300)
+                logger.error(f"❌ Error in market scan loop: {e}")
+                await asyncio.sleep(300)  # Wait 5 minutes on error
 
     async def _scan_market(self):
         """Scan market for new trading opportunities"""
         self.cycle_number += 1
-        self._check_daily_reset()
-
         logger.info("=" * 60)
-        logger.info(f"MARKET SCAN - CYCLE #{self.cycle_number}")
+        logger.info(f"🔍 MARKET SCAN - CYCLE #{self.cycle_number}")
         logger.info("=" * 60)
 
         try:
             # 1. Get macro data
-            logger.info("Fetching macro data...")
+            logger.info("📊 Fetching macro data...")
             macro_data = await self.macro_fetcher.get_all_macro_data()
 
             # 2. Get BTC data for correlation features (from production)
-            logger.info("Fetching BTC data from production...")
+            logger.info("📊 Fetching BTC data from production...")
             btc_data = self.binance_data.get_historical_klines('BTCUSDT', '1d', 250)
 
             # 3. Fetch data for all tickers (from production)
-            logger.info(f"Fetching data for {len(settings.TICKERS)} tickers...")
+            logger.info(f"📊 Fetching data for {len(settings.TICKERS)} tickers from production...")
             tickers_data = {}
 
             for ticker in settings.TICKERS:
@@ -283,14 +297,19 @@ class TradingBot:
                     if len(df) >= 200:
                         tickers_data[ticker] = df
                     else:
-                        logger.warning(f"Insufficient data for {ticker}: {len(df)} rows")
+                        logger.warning(f"⚠️ Insufficient data for {ticker}: {len(df)} rows")
                 except Exception as e:
-                    logger.error(f"Failed to fetch {ticker}: {e}")
+                    logger.error(f"❌ Failed to fetch {ticker}: {e}")
 
-            logger.info(f"Fetched data for {len(tickers_data)} tickers")
+            logger.info(f"✅ Fetched data for {len(tickers_data)} tickers")
+
+            # 3b. Save latest data to database for historical analysis
+            # Incluir BTCUSDT para features de correlación
+            tickers_data_with_btc = {'BTCUSDT': btc_data, **tickers_data}
+            self._save_prices_to_db(tickers_data_with_btc)
 
             # 4. Make predictions
-            logger.info("Making predictions...")
+            logger.info("🔮 Making predictions...")
             predictions_df = self.predictor.predict_multiple(
                 tickers_data=tickers_data,
                 btc_data=btc_data,
@@ -299,7 +318,7 @@ class TradingBot:
 
             # 5. Save all signals to database
             total_signals = len(predictions_df)
-            buy_signals = int((predictions_df['prediction'] == 1).sum())
+            buy_signals = (predictions_df['prediction'] == 1).sum()
 
             for _, row in predictions_df.iterrows():
                 self.db.save_signal(
@@ -309,13 +328,13 @@ class TradingBot:
                     features=row['features']
                 )
 
-            logger.info(f"Signals: {buy_signals} BUY / {total_signals} total")
+            logger.info(f"📊 Signals: {buy_signals} BUY / {total_signals} total")
 
-            # 6. Update bot status
+            # 6. Update bot status (convert numpy types to Python types)
             self.db.update_bot_status(
                 status='running',
-                total_signals=int(total_signals),
-                buy_signals=buy_signals,
+                total_signals=int(total_signals),  # Convert from numpy.int64 to int
+                buy_signals=int(buy_signals),      # Convert from numpy.int64 to int
                 cycle_number=self.cycle_number,
                 last_error=None
             )
@@ -323,22 +342,21 @@ class TradingBot:
             # 7. Get top buy signals
             top_signals = self.predictor.get_top_signals(predictions_df, top_n=10)
 
-            # 8. Execute trades if auto-trading enabled and daily loss allows
-            if self.auto_trading and len(top_signals) > 0 and self._can_trade():
+            # 8. Execute trades if auto-trading enabled
+            if self.auto_trading and len(top_signals) > 0:
                 await self._execute_signals(top_signals)
-            elif not self._can_trade():
-                logger.warning("Trading halted: daily loss limit reached")
-            elif not self.auto_trading:
-                logger.info("Auto-trading disabled. Signals logged only.")
+            else:
+                logger.info("ℹ️ Auto-trading disabled. Signals logged only.")
 
-            self.last_scan_time = _utcnow()
-            logger.success(f"Market scan complete - Cycle #{self.cycle_number}")
+            self.last_scan_time = datetime.utcnow()
+            logger.success(f"✅ Market scan complete - Cycle #{self.cycle_number}")
 
         except Exception as e:
-            logger.error(f"Market scan failed: {e}")
+            logger.error(f"❌ Market scan failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
+            # Update bot status with error
             self.db.update_bot_status(
                 status='error',
                 total_signals=0,
@@ -353,40 +371,34 @@ class TradingBot:
 
     async def _execute_signals(self, signals_df: pd.DataFrame):
         """Execute trades for buy signals"""
-        logger.info(f"Executing trades for {len(signals_df)} signals...")
+        logger.info(f"💰 Executing trades for {len(signals_df)} signals...")
 
         for _, signal in signals_df.iterrows():
             try:
                 await self._execute_trade(signal)
-                await asyncio.sleep(2)
+                await asyncio.sleep(2)  # Small delay between trades
             except Exception as e:
-                logger.error(f"Failed to execute trade for {signal['ticker']}: {e}")
+                logger.error(f"❌ Failed to execute trade for {signal['ticker']}: {e}")
 
     async def _execute_trade(self, signal: pd.Series):
         """Execute a single trade"""
         ticker = signal['ticker']
         probability = signal['probability']
 
-        # Duplicate position check
-        if ticker in self.positions:
-            logger.warning(f"Position already open for {ticker}, skipping")
-            return
-
-        # Daily loss check
-        if not self._can_trade():
-            return
-
-        logger.info(f"Evaluating trade: {ticker} (p={probability:.4f})")
+        logger.info(f"💵 Evaluating trade: {ticker} (p={probability:.4f})")
 
         # 1. Get current price
         current_price = self.binance.get_current_price(ticker)
         if current_price is None:
-            logger.error(f"Could not get price for {ticker}")
+            logger.error(f"❌ Could not get price for {ticker}")
             return
 
-        # 2. Get portfolio value
-        usdt_balance = self.binance.get_usdt_balance()
-        portfolio_value = usdt_balance
+        # 2. Get portfolio value from our managed portfolio (NOT Binance)
+        portfolio = self.db.get_portfolio()
+        portfolio_value = portfolio['total_value']
+        available_balance = portfolio['available_balance']
+
+        logger.info(f"💰 Portfolio: ${portfolio_value:.2f} total, ${available_balance:.2f} available")
 
         # 3. Check if we should trade
         current_positions = len(self.positions)
@@ -398,7 +410,7 @@ class TradingBot:
         )
 
         if not should_trade:
-            logger.warning(f"Trade blocked: {reason}")
+            logger.warning(f"⚠️ Trade blocked: {reason}")
             return
 
         # 4. Calculate position size
@@ -411,38 +423,39 @@ class TradingBot:
         quantity = position_info['quantity']
         usd_value = position_info['usd_value']
 
+        # 4.5 Check if we can afford this trade
+        can_afford, afford_reason = self.db.can_afford_trade(usd_value)
+        if not can_afford:
+            logger.warning(f"⚠️ Trade blocked: {afford_reason}")
+            return
+
         # Round quantity to Binance precision
         quantity = self.binance.round_quantity(ticker, quantity)
 
-        if quantity <= 0:
-            logger.warning(f"Quantity too small for {ticker} after rounding")
-            return
+        logger.info(f"💰 Position: {quantity} {ticker} = ${usd_value:.2f}")
 
-        logger.info(f"Position: {quantity} {ticker} = ${usd_value:.2f}")
-
-        # 5. Execute buy order
-        logger.info(f"Executing BUY order: {ticker}")
+        # 5. Execute buy order on Binance
+        logger.info(f"🛒 Executing BUY order: {ticker}")
         order = self.binance.create_market_buy_order(ticker, quantity)
 
         if order is None:
-            logger.error(f"Buy order failed for {ticker}")
+            logger.error(f"❌ Buy order failed for {ticker}")
             return
 
-        # 6. Get actual executed price (weighted average of all fills)
-        fills = order.get('fills', [])
-        if fills:
-            total_qty = sum(float(f['qty']) for f in fills)
-            total_cost = sum(float(f['price']) * float(f['qty']) for f in fills)
-            executed_price = total_cost / total_qty if total_qty > 0 else current_price
-        else:
-            executed_price = current_price
-
+        # 6. Get actual executed price
+        executed_price = float(order.get('fills', [{}])[0].get('price', current_price))
         executed_qty = float(order['executedQty'])
         executed_value = executed_price * executed_qty
 
-        logger.success(f"BUY executed: {executed_qty} {ticker} @ ${executed_price:.2f}")
+        logger.success(f"✅ BUY executed: {executed_qty} {ticker} @ ${executed_price:.2f}")
 
-        # 7. Calculate DYNAMIC TP/SL levels
+        # 6.5 Deduct from available balance
+        if not self.db.deduct_from_balance(executed_value, ticker):
+            logger.error(f"❌ Failed to deduct ${executed_value:.2f} from balance for {ticker}")
+            # Note: The trade was already executed on Binance, so we continue but log the error
+
+        # 7. Calculate DYNAMIC TP/SL levels using risk manager
+        # Get macro data for market conditions
         macro_data_dict = {
             'fear_greed': signal.get('features', {}).get('fear_greed_value', 50),
             'vix': signal.get('features', {}).get('vix', 20)
@@ -455,37 +468,37 @@ class TradingBot:
             market_conditions=macro_data_dict
         )
 
+        # 8. Place OCO order for TP1 (first take profit level)
+        # We'll manage TP2, TP3 and trailing stop dynamically in monitoring
         logger.info(
-            f"Dynamic TP/SL: SL=${tp_sl['stop_loss']:.4f} (-{tp_sl['stop_loss_pct']*100:.1f}%) | "
+            f"🎯 Dynamic TP/SL: SL=${tp_sl['stop_loss']:.4f} (-{tp_sl['stop_loss_pct']*100:.1f}%) | "
             f"TP1=${tp_sl['tp1']:.4f} (+{tp_sl['tp1_pct']*100:.1f}%) | "
             f"TP2=${tp_sl['tp2']:.4f} (+{tp_sl['tp2_pct']*100:.1f}%) | "
             f"TP3=${tp_sl['tp3']:.4f} (+{tp_sl['tp3_pct']*100:.1f}%)"
         )
 
-        # 8. Place OCO for first TP level (30% of position)
+        # Place OCO for first TP level (30% of position)
         oco_quantity = executed_qty * tp_sl['tp1_size']
         oco_quantity = self.binance.round_quantity(ticker, oco_quantity)
 
-        oco_order_id = None
-        if oco_quantity > 0:
-            # Round prices to tick size
-            tp_price = self.binance.round_price(ticker, tp_sl['tp1'])
-            sl_price = self.binance.round_price(ticker, tp_sl['stop_loss'])
-            sl_limit_price = self.binance.round_price(ticker, tp_sl['stop_loss'] * 0.99)
+        # Round prices to avoid Binance precision errors
+        tp_price = self.binance.round_price(ticker, tp_sl['tp1'])
+        sl_price = self.binance.round_price(ticker, tp_sl['stop_loss'])
+        sl_limit_price = self.binance.round_price(ticker, tp_sl['stop_loss'] * 0.99)
 
-            if tp_price and sl_price and sl_limit_price:
-                oco_order = self.binance.create_oco_order(
-                    symbol=ticker,
-                    quantity=oco_quantity,
-                    price=tp_price,
-                    stop_price=sl_price,
-                    stop_limit_price=sl_limit_price
-                )
-                if oco_order:
-                    oco_order_id = str(oco_order.get('orderListId', ''))
-                    logger.success(f"OCO order placed for {ticker} (ID: {oco_order_id})")
+        oco_order = self.binance.create_oco_order(
+            symbol=ticker,
+            quantity=oco_quantity,
+            price=tp_price,
+            stop_price=sl_price,
+            stop_limit_price=sl_limit_price
+        )
+
+        if oco_order:
+            logger.success(f"✅ OCO order placed for {ticker} (TP1: 30% position)")
 
         # 9. Log trade to database
+        # Get signal_id from the most recent signal for this ticker
         recent_signals = self.db.get_recent_signals(limit=100)
         signal_id = None
         for _, sig in recent_signals.iterrows():
@@ -500,13 +513,22 @@ class TradingBot:
             quantity=executed_qty,
             price=executed_price,
             total_value=executed_value,
-            status='executed'
+            status='executed',
+            probability=probability  # Save model confidence
         )
 
-        # 10. Store position in memory AND database
-        position_data = {
+        # Update positions table in database
+        self.db.upsert_position(
+            ticker=ticker,
+            quantity=executed_qty,
+            avg_buy_price=executed_price,
+            current_price=executed_price
+        )
+
+        # 10. Update position tracking with dynamic TP/SL data
+        self.positions[ticker] = {
             'quantity': executed_qty,
-            'remaining_quantity': executed_qty,
+            'remaining_quantity': executed_qty,  # Track remaining after partial exits
             'entry_price': executed_price,
             'current_price': executed_price,
             'stop_loss': tp_sl['stop_loss'],
@@ -522,37 +544,12 @@ class TradingBot:
             'atr_pct': tp_sl['atr_pct'],
             'trailing_stop_enabled': tp_sl['trailing_stop_enabled'],
             'trailing_stop_active': False,
-            'oco_order_id': oco_order_id,
-            'entry_features': signal.get('features', {}),
+            'entry_features': signal.get('features', {}),  # Save entry features for comparison
             'trade_id': trade_id,
-            'entry_time': _utcnow()
+            'entry_time': datetime.utcnow()
         }
 
-        self.positions[ticker] = position_data
-
-        # Persist to database
-        self.db.save_position({
-            'ticker': ticker,
-            'quantity': executed_qty,
-            'remaining_quantity': executed_qty,
-            'avg_buy_price': executed_price,
-            'current_price': executed_price,
-            'total_value': executed_value,
-            'pnl': 0,
-            'pnl_percentage': 0,
-            'stop_loss': tp_sl['stop_loss'],
-            'tp1': tp_sl['tp1'], 'tp1_hit': False, 'tp1_size': tp_sl['tp1_size'],
-            'tp2': tp_sl['tp2'], 'tp2_hit': False, 'tp2_size': tp_sl['tp2_size'],
-            'tp3': tp_sl['tp3'], 'tp3_hit': False, 'tp3_size': tp_sl['tp3_size'],
-            'atr_pct': tp_sl['atr_pct'],
-            'trailing_stop_enabled': tp_sl['trailing_stop_enabled'],
-            'trailing_stop_active': False,
-            'oco_order_id': oco_order_id,
-            'trade_id': trade_id,
-            'entry_time': _utcnow()
-        })
-
-        logger.success(f"Trade complete: {ticker} position opened with dynamic TP/SL")
+        logger.success(f"✅ Trade complete: {ticker} position opened with dynamic TP/SL")
 
     # ============================================
     # POSITION MONITORING (every 5 minutes)
@@ -560,23 +557,23 @@ class TradingBot:
 
     async def _position_monitoring_loop(self):
         """Monitor open positions and check TP/SL"""
-        logger.info(f"Position monitoring started (interval: {self.position_monitoring_minutes}min)")
+        logger.info(f"👀 Position monitoring started (interval: {self.position_monitoring_minutes}min)")
 
         while self.is_running:
             try:
                 if len(self.positions) > 0:
                     await self._monitor_positions()
 
+                # Wait for next monitoring interval
                 await asyncio.sleep(self.position_monitoring_minutes * 60)
 
             except Exception as e:
-                logger.error(f"Error in position monitoring: {e}")
+                logger.error(f"❌ Error in position monitoring: {e}")
                 await asyncio.sleep(60)
 
     async def _monitor_positions(self):
         """Check all open positions with intelligent exit strategy"""
-        logger.debug(f"Monitoring {len(self.positions)} positions...")
-        self._check_daily_reset()
+        logger.debug(f"👀 Monitoring {len(self.positions)} positions...")
 
         for ticker, position in list(self.positions.items()):
             try:
@@ -585,6 +582,7 @@ class TradingBot:
                 if current_price is None:
                     continue
 
+                # Update position
                 position['current_price'] = current_price
 
                 # 2. Calculate P&L
@@ -594,10 +592,30 @@ class TradingBot:
                 logger.debug(f"  {ticker}: ${current_price:.2f} | P&L: ${pnl:.2f} ({pnl_pct:+.2f}%)")
 
                 # 3. Get current market features for intelligent exit
-                current_features = await self._get_current_features(ticker)
+                try:
+                    df = self.binance_data.get_historical_klines(ticker, '1d', 250)
+                    btc_data = self.binance_data.get_historical_klines('BTCUSDT', '1d', 250)
+
+                    # Get macro data (await since we're in async function)
+                    macro_data = await self.macro_fetcher.get_all_macro_data()
+
+                    # Calculate current features
+                    from src.data.features import FeatureEngineer
+                    feature_engineer = FeatureEngineer()
+                    df_with_features = feature_engineer.calculate_features(df, btc_data, macro_data)
+                    feature_vector = feature_engineer.get_feature_vector(df_with_features)
+
+                    if len(feature_vector) > 0:
+                        current_features = feature_vector.iloc[-1].to_dict()
+                    else:
+                        current_features = {}
+
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not get current features for {ticker}: {e}")
+                    current_features = {}
 
                 # 4. Apply Trailing Stop Loss
-                if position.get('trailing_stop_enabled'):
+                if position['trailing_stop_enabled']:
                     new_stop_loss, activated = self.risk_manager.calculate_trailing_stop(
                         entry_price=position['entry_price'],
                         current_price=current_price,
@@ -609,16 +627,23 @@ class TradingBot:
                         old_sl = position['stop_loss']
                         position['stop_loss'] = new_stop_loss
                         position['trailing_stop_active'] = True
-                        logger.info(f"Trailing SL {ticker}: ${old_sl:.4f} -> ${new_stop_loss:.4f}")
+                        logger.info(f"🔼 {ticker} Trailing SL: ${old_sl:.4f} → ${new_stop_loss:.4f}")
 
-                        # Cancel old OCO and place new one with updated SL
-                        await self._update_oco_stop_loss(ticker, position, new_stop_loss)
+                        # Update OCO order with new stop loss
+                        # Note: Binance requires canceling old OCO and creating new one
+                        # For simplicity, we'll just track it here
 
                 # 5. Check intelligent exit conditions
                 tp_levels = {
-                    'tp1': position['tp1'], 'tp1_hit': position['tp1_hit'], 'tp1_size': position['tp1_size'],
-                    'tp2': position['tp2'], 'tp2_hit': position['tp2_hit'], 'tp2_size': position['tp2_size'],
-                    'tp3': position['tp3'], 'tp3_hit': position['tp3_hit'], 'tp3_size': position['tp3_size']
+                    'tp1': position['tp1'],
+                    'tp1_hit': position['tp1_hit'],
+                    'tp1_size': position['tp1_size'],
+                    'tp2': position['tp2'],
+                    'tp2_hit': position['tp2_hit'],
+                    'tp2_size': position['tp2_size'],
+                    'tp3': position['tp3'],
+                    'tp3_hit': position['tp3_hit'],
+                    'tp3_size': position['tp3_size']
                 }
 
                 exit_decision = self.risk_manager.check_exit_conditions(
@@ -634,158 +659,188 @@ class TradingBot:
 
                 # 6. Execute exit if needed
                 if exit_decision['action'] == 'exit_full':
-                    logger.warning(f"{ticker} FULL EXIT: {exit_decision['reason']}")
-                    await self._cancel_oco_if_exists(ticker, position)
-                    sell_pnl = await self._execute_exit(ticker, position['remaining_quantity'], current_price, exit_decision['reason'])
-                    if sell_pnl is not None and sell_pnl < 0:
-                        self._record_loss(abs(sell_pnl))
-                    self.db.delete_position(ticker)
+                    logger.warning(f"🚪 {ticker} FULL EXIT: {exit_decision['reason']}")
+                    await self._execute_exit(ticker, position['remaining_quantity'], current_price, exit_decision['reason'])
                     del self.positions[ticker]
                     continue
 
                 elif exit_decision['action'] == 'exit_partial':
                     exit_qty = position['remaining_quantity'] * exit_decision['quantity']
-                    logger.info(f"{ticker} PARTIAL EXIT: {exit_decision['reason']} ({exit_decision['quantity']*100:.0f}%)")
+                    logger.info(f"📤 {ticker} PARTIAL EXIT: {exit_decision['reason']} ({exit_decision['quantity']*100:.0f}%)")
                     await self._execute_exit(ticker, exit_qty, current_price, exit_decision['reason'])
 
                     position['remaining_quantity'] -= exit_qty
 
-                    # Mark TP level as hit
+                    # Mark TP level as hit if applicable
                     if 'level' in exit_decision:
                         level_key = f"{exit_decision['level'].lower()}_hit"
                         position[level_key] = True
 
-                # 7. Check basic SL (safety net if OCO missed)
+                # 7. Check basic TP/SL (in case OCO failed)
                 if current_price <= position['stop_loss']:
-                    logger.warning(f"{ticker} STOP LOSS: ${current_price:.2f} <= ${position['stop_loss']:.2f}")
-                    await self._cancel_oco_if_exists(ticker, position)
-                    sell_pnl = await self._execute_exit(ticker, position['remaining_quantity'], current_price, 'stop_loss')
-                    if sell_pnl is not None and sell_pnl < 0:
-                        self._record_loss(abs(sell_pnl))
-                    self.db.delete_position(ticker)
+                    logger.warning(f"🛑 {ticker} STOP LOSS hit: ${current_price:.2f} <= ${position['stop_loss']:.2f}")
+                    await self._execute_exit(ticker, position['remaining_quantity'], current_price, 'stop_loss')
                     del self.positions[ticker]
                     continue
 
                 # 8. Update position in database
-                self.db.update_position(ticker, {
-                    'current_price': current_price,
-                    'total_value': current_price * position['remaining_quantity'],
-                    'pnl': pnl,
-                    'pnl_percentage': pnl_pct / 100,
-                    'remaining_quantity': position['remaining_quantity'],
-                    'stop_loss': position['stop_loss'],
-                    'tp1_hit': position['tp1_hit'],
-                    'tp2_hit': position['tp2_hit'],
-                    'tp3_hit': position['tp3_hit'],
-                    'trailing_stop_active': position.get('trailing_stop_active', False),
-                })
+                self.db.execute_command(
+                    """
+                    UPDATE positions
+                    SET current_price = :current_price,
+                        total_value = :total_value,
+                        pnl = :pnl,
+                        pnl_percentage = :pnl_pct,
+                        last_update = :last_update
+                    WHERE ticker = :ticker
+                    """,
+                    {
+                        'ticker': ticker,
+                        'current_price': current_price,
+                        'total_value': current_price * position['remaining_quantity'],
+                        'pnl': pnl,
+                        'pnl_pct': pnl_pct / 100,
+                        'last_update': datetime.utcnow()
+                    }
+                )
 
             except Exception as e:
-                logger.error(f"Error monitoring {ticker}: {e}")
+                logger.error(f"❌ Error monitoring {ticker}: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
 
-    async def _get_current_features(self, ticker: str) -> dict:
-        """Get current features for a ticker (reuses predictor's feature engineer)"""
+    async def _execute_exit(self, ticker: str, quantity: float, price: float, reason: str):
+        """Execute exit (sell) for a position or partial position"""
         try:
-            df = self.binance_data.get_historical_klines(ticker, '1d', 250)
-            btc_data = self.binance_data.get_historical_klines('BTCUSDT', '1d', 250)
+            logger.info(f"💰 Executing SELL: {quantity} {ticker} @ ${price:.4f}")
 
-            # Get macro data (async-safe)
-            macro_data = await self.macro_fetcher.get_all_macro_data()
+            # Get entry price for P&L calculation
+            entry_price = price  # Default
+            if ticker in self.positions:
+                entry_price = self.positions[ticker].get('entry_price', price)
 
-            # Use the predictor's feature engineer (not a new instance)
-            df_with_features = self.predictor.feature_engineer.calculate_features(df, btc_data, macro_data)
-            feature_vector = self.predictor.feature_engineer.get_feature_vector(df_with_features)
-
-            if len(feature_vector) > 0:
-                return feature_vector.iloc[-1].to_dict()
-        except Exception as e:
-            logger.warning(f"Could not get current features for {ticker}: {e}")
-
-        return {}
-
-    async def _cancel_oco_if_exists(self, ticker: str, position: dict):
-        """Cancel existing OCO order before placing new one or closing position"""
-        oco_id = position.get('oco_order_id')
-        if oco_id:
-            try:
-                self.binance.cancel_order(ticker, oco_id)
-                logger.info(f"Cancelled OCO order for {ticker}")
-            except Exception as e:
-                logger.warning(f"Could not cancel OCO for {ticker}: {e}")
-
-    async def _update_oco_stop_loss(self, ticker: str, position: dict, new_stop_loss: float):
-        """Cancel old OCO and place new one with updated stop loss"""
-        await self._cancel_oco_if_exists(ticker, position)
-
-        remaining = position['remaining_quantity']
-        oco_qty = self.binance.round_quantity(ticker, remaining * position.get('tp1_size', 0.3))
-
-        if oco_qty > 0 and not position.get('tp1_hit', False):
-            tp_price = self.binance.round_price(ticker, position['tp1'])
-            sl_price = self.binance.round_price(ticker, new_stop_loss)
-            sl_limit = self.binance.round_price(ticker, new_stop_loss * 0.99)
-
-            if tp_price and sl_price and sl_limit:
-                oco = self.binance.create_oco_order(
-                    symbol=ticker,
-                    quantity=oco_qty,
-                    price=tp_price,
-                    stop_price=sl_price,
-                    stop_limit_price=sl_limit
-                )
-                if oco:
-                    position['oco_order_id'] = str(oco.get('orderListId', ''))
-
-    async def _execute_exit(self, ticker: str, quantity: float, price: float, reason: str) -> Optional[float]:
-        """Execute exit (sell). Returns realized PnL or None on failure."""
-        try:
-            logger.info(f"Executing SELL: {quantity} {ticker} @ ${price:.4f} ({reason})")
-
+            # Round quantity
             quantity = self.binance.round_quantity(ticker, quantity)
-            if quantity <= 0:
-                logger.warning(f"Exit quantity too small for {ticker}")
-                return None
 
+            # Execute market sell
             order = self.binance.create_market_sell_order(ticker, quantity)
 
             if order:
-                fills = order.get('fills', [])
-                if fills:
-                    total_qty = sum(float(f['qty']) for f in fills)
-                    total_cost = sum(float(f['price']) * float(f['qty']) for f in fills)
-                    executed_price = total_cost / total_qty if total_qty > 0 else price
-                else:
-                    executed_price = price
-
+                executed_price = float(order.get('fills', [{}])[0].get('price', price))
                 executed_qty = float(order['executedQty'])
+                executed_value = executed_price * executed_qty
 
-                # Calculate PnL
-                entry_price = self.positions.get(ticker, {}).get('entry_price', price)
-                sell_pnl = (executed_price - entry_price) * executed_qty
+                # Calculate P&L for this sale
+                sale_pnl = (executed_price - entry_price) * executed_qty
 
-                logger.success(f"SELL executed: {executed_qty} {ticker} @ ${executed_price:.2f} | "
-                             f"PnL: ${sell_pnl:.2f} | Reason: {reason}")
+                logger.success(f"✅ SELL executed: {executed_qty} {ticker} @ ${executed_price:.2f} | P&L: ${sale_pnl:+.2f} | Reason: {reason}")
 
-                # Log to database with PnL
+                # Add proceeds to available balance
+                self.db.add_to_balance(
+                    amount=executed_value,
+                    pnl=sale_pnl,
+                    ticker=ticker
+                )
+
+                # Log to database
                 self.db.save_trade(
                     signal_id=0,
                     ticker=ticker,
                     action='SELL',
                     quantity=executed_qty,
                     price=executed_price,
-                    total_value=executed_price * executed_qty,
+                    total_value=executed_value,
                     status='executed',
-                    pnl=sell_pnl
+                    probability=None  # SELL trades don't have model probability
                 )
 
-                return sell_pnl
+        except Exception as e:
+            logger.error(f"❌ Exit failed for {ticker}: {e}")
+
+    # ============================================
+    # BINANCE SYNC (every 60 minutes)
+    # ============================================
+
+    async def _binance_sync_loop(self):
+        """Sync positions with Binance every 60 minutes"""
+        logger.info("🔄 Binance sync started (interval: 60min)")
+
+        while self.is_running:
+            try:
+                await self._sync_positions_with_binance()
+
+                # Wait for next sync interval (60 minutes)
+                await asyncio.sleep(60 * 60)
+
+            except Exception as e:
+                logger.error(f"❌ Error in Binance sync: {e}")
+                await asyncio.sleep(60)
+
+    async def _sync_positions_with_binance(self):
+        """Fetch real positions from Binance and update database (optimized)"""
+        try:
+            logger.info("🔄 Syncing positions with Binance...")
+
+            # Get positions that the bot has opened (from DB)
+            db_positions = self.db.get_positions()
+
+            if len(db_positions) == 0:
+                logger.info("📊 No bot positions to sync")
+                return
+
+            # Get all balances from Binance ONCE
+            logger.debug("📊 Fetching account balances from Binance...")
+            balances = self.binance.get_account_balance()
+
+            # Get all tickers we need prices for
+            tickers = [row['ticker'] for _, row in db_positions.iterrows()]
+
+            # Fetch ALL prices in ONE API call
+            all_prices = self.binance.get_multiple_prices(tickers)
+
+            # Update each position
+            synced_count = 0
+            for _, db_pos in db_positions.iterrows():
+                ticker = db_pos['ticker']
+
+                try:
+                    # Get current price from batch
+                    current_price = all_prices.get(ticker)
+                    if current_price is None:
+                        logger.warning(f"⚠️ Could not get price for {ticker}")
+                        continue
+
+                    # Check if position still exists in Binance balances
+                    asset = ticker.replace('USDT', '')
+
+                    if asset not in balances or balances[asset]['total'] < 0.0001:
+                        # Position was closed outside the bot
+                        self.db.delete_position(ticker)
+                        logger.info(f"🗑️ Removed closed position: {ticker}")
+                        continue
+
+                    # Get actual quantity from Binance
+                    actual_quantity = balances[asset]['total']
+
+                    # Update position with current data
+                    self.db.upsert_position(
+                        ticker=ticker,
+                        quantity=actual_quantity,
+                        avg_buy_price=float(db_pos['avg_buy_price']),
+                        current_price=current_price
+                    )
+
+                    logger.debug(f"  ✅ Synced {ticker}: {actual_quantity:.4f} @ ${current_price:.4f}")
+                    synced_count += 1
+
+                except Exception as e:
+                    logger.error(f"❌ Failed to sync {ticker}: {e}")
+                    continue
+
+            logger.success(f"✅ Synced {synced_count} bot positions with Binance")
 
         except Exception as e:
-            logger.error(f"Exit failed for {ticker}: {e}")
-
-        return None
+            logger.error(f"❌ Failed to sync with Binance: {e}")
 
     # ============================================
     # UTILITIES
@@ -809,6 +864,7 @@ class TradingBot:
 
 async def main():
     """Main entry point"""
+    # Setup logging
     logger.remove()
     logger.add(
         lambda msg: print(msg, end=""),
@@ -822,6 +878,7 @@ async def main():
         level="DEBUG"
     )
 
+    # Create and start bot
     bot = TradingBot()
     await bot.start()
 
