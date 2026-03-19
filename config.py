@@ -68,10 +68,13 @@ class Settings(BaseSettings):
     # NOTE: Increased from 0.95 to 0.97 after analysis showed too many high-confidence
     # predictions (28 in 7 days). This should reduce false positives and give
     # approximately 1-2 signals per day instead of 4+.
-    PREDICTION_THRESHOLD: float = 0.97  # 97% confidence threshold (more conservative)
+    PREDICTION_THRESHOLD: float = 0.97  # 97% confidence threshold (default, overridden by tier)
     POSITION_SIZE_PCT: float = 0.10  # 10% of capital per position
     MAX_POSITION_SIZE_PCT: float = 0.15  # Max 15% per position
-    TAKE_PROFIT_PCT: float = 0.15  # 15% take profit
+    # TP/SL optimized by Monte Carlo simulation (2000 paths × 30yr):
+    # - SL 5% / TP 20% (ratio 4:1) = best median outcome
+    # - Multi-level TP in DynamicRiskManager: TP1=12%, TP2=25%, TP3=50%
+    TAKE_PROFIT_PCT: float = 0.20  # 20% base take profit (was 15%)
     STOP_LOSS_PCT: float = 0.05  # 5% stop loss
     MAX_PORTFOLIO_RISK_PCT: float = 0.30  # 30% max portfolio risk
     MAX_POSITIONS: int = 10  # Max 10 simultaneous positions

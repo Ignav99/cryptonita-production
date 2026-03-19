@@ -19,31 +19,47 @@ from config import settings
 
 class DynamicRiskManager:
     """
-    Gestor dinámico de riesgo para posiciones
+    Gestor dinámico de riesgo para posiciones.
+    Tier-aware: adapta TP/SL/trailing según el perfil de riesgo de cada moneda.
     """
 
     def __init__(self):
         """Initialize dynamic risk manager"""
 
         # TP/SL base desde config
-        self.base_tp_pct = settings.TAKE_PROFIT_PCT  # 0.15 (15%)
+        self.base_tp_pct = settings.TAKE_PROFIT_PCT  # 0.20 (20%)
         self.base_sl_pct = settings.STOP_LOSS_PCT    # 0.05 (5%)
 
-        # Niveles de Take Profit parcial (fractions of REMAINING quantity)
-        # TP1: sell 30% of remaining (30% of original)
-        # TP2: sell 50% of remaining (35% of original)
-        # TP3: sell 100% of remaining (35% of original) - close entire position
+        # Niveles de Take Profit parcial (optimized by Monte Carlo simulation)
+        # TP1: sell 25% — lock early profit
+        # TP2: sell 35% — substantial gain secured
+        # TP3: sell 100% remaining — let winner run to max
         self.tp_levels = [
-            {'name': 'TP1', 'pct': 0.10, 'size': 0.30},
-            {'name': 'TP2', 'pct': 0.20, 'size': 0.50},
-            {'name': 'TP3', 'pct': 0.40, 'size': 1.00},
+            {'name': 'TP1', 'pct': 0.12, 'size': 0.25},
+            {'name': 'TP2', 'pct': 0.25, 'size': 0.35},
+            {'name': 'TP3', 'pct': 0.50, 'size': 1.00},
         ]
+
+        # Tier-specific TP/SL adjustments
+        # Tier 1 (Blue Chip): wider TP, let winners run longer
+        # Tier 4 (Meme): tighter SL, take profit faster
+        self.tier_adjustments = {
+            1: {'sl_mult': 1.2, 'tp_mult': 1.3, 'trailing_activation': 0.04, 'trailing_atr_mult': 1.2},
+            2: {'sl_mult': 1.0, 'tp_mult': 1.1, 'trailing_activation': 0.05, 'trailing_atr_mult': 1.5},
+            3: {'sl_mult': 1.0, 'tp_mult': 1.0, 'trailing_activation': 0.05, 'trailing_atr_mult': 1.5},
+            4: {'sl_mult': 0.7, 'tp_mult': 0.8, 'trailing_activation': 0.03, 'trailing_atr_mult': 2.0},
+        }
 
         # Configuración de Trailing Stop Loss
         self.trailing_stop_activation = 0.05  # Activa TSL cuando ganancia > 5%
         self.trailing_stop_distance_atr_mult = 1.5  # Distancia = 1.5 * ATR
 
-        logger.info("✅ Dynamic Risk Manager initialized")
+        logger.info("Dynamic Risk Manager initialized (tier-aware, TP 12/25/50%)")
+
+    def _get_tier(self, ticker: str) -> int:
+        """Get tier number for a ticker"""
+        profile = settings.COIN_RISK_PROFILES.get(ticker, settings.DEFAULT_RISK_PROFILE)
+        return profile["tier"]
 
     def calculate_dynamic_tp_sl(
         self,
@@ -53,65 +69,51 @@ class DynamicRiskManager:
         market_conditions: Optional[Dict] = None
     ) -> Dict[str, float]:
         """
-        Calcula TP/SL dinámicos basados en features y condiciones del mercado
+        Calcula TP/SL dinámicos con tier-awareness.
 
-        Args:
-            entry_price: Precio de entrada
-            ticker: Símbolo del ticker
-            features: Dict con features calculadas (ATR, momentum, etc)
-            market_conditions: Dict con Fear&Greed, VIX, etc
-
-        Returns:
-            Dict con stop_loss, tp1, tp2, tp3, y distancias
+        Tier 1 (Blue Chip): SL más ancho (+20%), TP más amplio (+30%), trailing temprano
+        Tier 4 (Meme):      SL más ajustado (-30%), TP más rápido (-20%), trailing agresivo
         """
+        # Get tier adjustments
+        tier = self._get_tier(ticker)
+        tier_adj = self.tier_adjustments.get(tier, self.tier_adjustments[3])
 
         # Extraer ATR (volatilidad)
-        atr_pct = features.get('atr_pct', 0.03)  # Default 3%
+        atr_pct = features.get('atr_pct', 0.03)
 
         # Extraer momentum
         momentum_3d = features.get('momentum_3d', 0.0)
         momentum_strength = features.get('momentum_strength', 0.0)
 
-        # Ajustar multiplicadores según volatilidad
-        # Más volátil → TP/SL más amplios
+        # Multiplicadores
         volatility_multiplier = self._calculate_volatility_multiplier(atr_pct)
-
-        # Ajustar según momentum
-        # Más momentum → TP más amplio, SL más ajustado
-        momentum_multiplier = self._calculate_momentum_multiplier(
-            momentum_3d,
-            momentum_strength
-        )
-
-        # Ajustar según condiciones de mercado
+        momentum_multiplier = self._calculate_momentum_multiplier(momentum_3d, momentum_strength)
         market_multiplier = self._calculate_market_multiplier(market_conditions)
 
-        # Calcular Stop Loss dinámico
-        # SL base ajustado por volatilidad (más volátil = SL más amplio para evitar stop out prematuro)
-        dynamic_sl_pct = self.base_sl_pct * volatility_multiplier
-        dynamic_sl_pct = max(0.03, min(0.10, dynamic_sl_pct))  # Entre 3% y 10%
+        # Calcular Stop Loss dinámico (tier-adjusted)
+        dynamic_sl_pct = self.base_sl_pct * volatility_multiplier * tier_adj['sl_mult']
+        dynamic_sl_pct = max(0.03, min(0.12, dynamic_sl_pct))
 
         stop_loss = entry_price * (1 - dynamic_sl_pct)
 
-        # Calcular Take Profits dinámicos
-        # TP ajustados por volatilidad, momentum y mercado
-        tp_multiplier = volatility_multiplier * momentum_multiplier * market_multiplier
+        # Calcular Take Profits dinámicos (tier-adjusted)
+        tp_multiplier = volatility_multiplier * momentum_multiplier * market_multiplier * tier_adj['tp_mult']
 
         tp1_pct = self.tp_levels[0]['pct'] * tp_multiplier
         tp2_pct = self.tp_levels[1]['pct'] * tp_multiplier
         tp3_pct = self.tp_levels[2]['pct'] * tp_multiplier
 
-        # Límites razonables
-        tp1_pct = max(0.08, min(0.20, tp1_pct))   # Entre 8% y 20%
-        tp2_pct = max(0.15, min(0.35, tp2_pct))   # Entre 15% y 35%
-        tp3_pct = max(0.30, min(0.60, tp3_pct))   # Entre 30% y 60%
+        # Límites razonables (widened for tier 1, tightened for tier 4)
+        tp1_pct = max(0.06, min(0.25, tp1_pct))
+        tp2_pct = max(0.12, min(0.45, tp2_pct))
+        tp3_pct = max(0.25, min(0.80, tp3_pct))
 
         tp1 = entry_price * (1 + tp1_pct)
         tp2 = entry_price * (1 + tp2_pct)
         tp3 = entry_price * (1 + tp3_pct)
 
         logger.info(
-            f"📊 {ticker} | SL: -{dynamic_sl_pct*100:.1f}% | "
+            f"[T{tier}] {ticker} | SL: -{dynamic_sl_pct*100:.1f}% | "
             f"TP1: +{tp1_pct*100:.1f}% | TP2: +{tp2_pct*100:.1f}% | TP3: +{tp3_pct*100:.1f}% | "
             f"Vol: {volatility_multiplier:.2f}x | Mom: {momentum_multiplier:.2f}x"
         )
@@ -129,10 +131,13 @@ class DynamicRiskManager:
             'tp3_pct': tp3_pct,
             'tp3_size': self.tp_levels[2]['size'],
             'trailing_stop_enabled': True,
+            'trailing_activation': tier_adj['trailing_activation'],
+            'trailing_atr_mult': tier_adj['trailing_atr_mult'],
             'atr_pct': atr_pct,
+            'tier': tier,
             'volatility_mult': volatility_multiplier,
             'momentum_mult': momentum_multiplier,
-            'market_mult': market_multiplier
+            'market_mult': market_multiplier,
         }
 
     def _calculate_volatility_multiplier(self, atr_pct: float) -> float:
@@ -222,50 +227,79 @@ class DynamicRiskManager:
         entry_price: float,
         current_price: float,
         current_stop_loss: float,
-        atr_pct: float
+        atr_pct: float,
+        tp_levels: Optional[Dict] = None,
     ) -> Tuple[float, bool]:
         """
-        Calcula Trailing Stop Loss
+        Trailing Stop Loss — tier-aware, progressive tightening.
 
-        El TSL sube con el precio pero nunca baja.
-        Se activa cuando ganancia > 5%
+        Behavior:
+        - Activates when profit > tier activation threshold (3-5%)
+        - Distance shrinks as profit grows (lock more profit at higher levels)
+        - After TP1 hit: trail tighter (lock gains)
+        - After TP2 hit: trail very tight (protect remaining position)
 
         Args:
             entry_price: Precio de entrada
             current_price: Precio actual
             current_stop_loss: SL actual
             atr_pct: ATR como % del precio (volatilidad)
+            tp_levels: Dict with tier, trailing_activation, trailing_atr_mult, tp1_hit, tp2_hit
 
         Returns:
             (nuevo_stop_loss, activado)
         """
-        # Calcular ganancia actual
         profit_pct = (current_price - entry_price) / entry_price
 
-        # Solo activar TSL si ganancia > umbral
-        if profit_pct < self.trailing_stop_activation:
+        # Get tier-specific params
+        activation = self.trailing_stop_activation
+        atr_mult = self.trailing_stop_distance_atr_mult
+        if tp_levels:
+            activation = tp_levels.get('trailing_activation', activation)
+            atr_mult = tp_levels.get('trailing_atr_mult', atr_mult)
+
+        if profit_pct < activation:
             return current_stop_loss, False
 
-        # Calcular distancia del TSL basada en ATR
-        # Más volátil → más distancia (evitar stop out por volatilidad normal)
-        trailing_distance_pct = atr_pct * self.trailing_stop_distance_atr_mult
-        trailing_distance_pct = max(0.02, min(0.08, trailing_distance_pct))  # Entre 2% y 8%
+        # Progressive tightening: as profit grows, trail closer
+        # Base distance from ATR
+        base_distance = atr_pct * atr_mult
 
-        # Nuevo TSL = precio actual - distancia
+        # Tighten trailing based on profit level
+        if tp_levels and tp_levels.get('tp2_hit'):
+            # After TP2: very tight trail (lock most profit)
+            trailing_distance_pct = base_distance * 0.5
+        elif tp_levels and tp_levels.get('tp1_hit'):
+            # After TP1: tighter trail
+            trailing_distance_pct = base_distance * 0.7
+        elif profit_pct > 0.30:
+            # Big profit: tighten
+            trailing_distance_pct = base_distance * 0.6
+        elif profit_pct > 0.15:
+            # Good profit: moderate tighten
+            trailing_distance_pct = base_distance * 0.8
+        else:
+            trailing_distance_pct = base_distance
+
+        trailing_distance_pct = max(0.015, min(0.08, trailing_distance_pct))
+
         new_trailing_stop = current_price * (1 - trailing_distance_pct)
-
-        # El TSL nunca baja, solo sube
         new_stop_loss = max(current_stop_loss, new_trailing_stop)
 
-        # Asegurar que TSL esté por encima del precio de entrada (lock profit)
-        new_stop_loss = max(new_stop_loss, entry_price * 1.01)  # Mínimo +1% profit locked
+        # Lock minimum profit based on current level
+        if profit_pct > 0.10:
+            min_lock = entry_price * 1.05  # Lock at least 5%
+        else:
+            min_lock = entry_price * 1.01  # Lock at least 1%
+        new_stop_loss = max(new_stop_loss, min_lock)
 
         activated = new_stop_loss > current_stop_loss
 
         if activated:
+            locked_pct = (new_stop_loss - entry_price) / entry_price * 100
             logger.info(
-                f"🔼 Trailing Stop updated: ${current_stop_loss:.4f} → ${new_stop_loss:.4f} "
-                f"(Distance: {trailing_distance_pct*100:.1f}%, Profit: +{profit_pct*100:.1f}%)"
+                f"Trailing Stop: ${current_stop_loss:.4f} -> ${new_stop_loss:.4f} "
+                f"(dist={trailing_distance_pct*100:.1f}%, profit=+{profit_pct*100:.1f}%, locked=+{locked_pct:.1f}%)"
             )
 
         return new_stop_loss, activated
