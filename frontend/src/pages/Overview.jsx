@@ -46,10 +46,10 @@ export default function Overview() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['botStatus'] }),
   });
 
-  const balance = stats?.balance ?? stats?.total_balance;
+  const balance = stats?.portfolio_value ?? stats?.balance ?? stats?.total_balance;
   const totalPnl = stats?.total_pnl ?? stats?.realized_pnl;
   const winRate = stats?.win_rate;
-  const openCount = stats?.open_positions ?? 0;
+  const openCount = stats?.active_positions ?? stats?.open_positions ?? 0;
 
   return (
     <div className="space-y-6">
@@ -156,11 +156,11 @@ export default function Overview() {
                     </div>
                     <Badge
                       variant={
-                        sig.action === 'BUY' ? 'success' :
-                        sig.action === 'SELL' ? 'danger' : 'neutral'
+                        (sig.signal_type || sig.action) === 'BUY' ? 'success' :
+                        (sig.signal_type || sig.action) === 'SELL' ? 'danger' : 'neutral'
                       }
                     >
-                      {sig.action}
+                      {sig.signal_type || sig.action}
                     </Badge>
                   </div>
                 ))}

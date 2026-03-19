@@ -462,23 +462,48 @@ class DatabaseManager:
         ticker: str,
         quantity: float,
         avg_buy_price: float,
-        current_price: float
+        current_price: float,
+        remaining_quantity: float = None,
+        stop_loss: float = None,
+        tp1: float = None,
+        tp1_hit: bool = False,
+        tp1_size: float = None,
+        tp2: float = None,
+        tp2_hit: bool = False,
+        tp2_size: float = None,
+        tp3: float = None,
+        tp3_hit: bool = False,
+        tp3_size: float = None,
+        atr_pct: float = None,
+        trailing_stop_enabled: bool = False,
+        trade_id: int = None,
     ) -> bool:
         """
-        Insert or update a position
+        Insert or update a position with full state
 
         Args:
             ticker: Crypto ticker
-            quantity: Position quantity
+            quantity: Total position quantity
             avg_buy_price: Average buy price
             current_price: Current market price
+            remaining_quantity: Remaining qty after partial exits
+            stop_loss: Current stop loss price
+            tp1/tp2/tp3: Take profit levels
+            tp1_hit/tp2_hit/tp3_hit: Whether TP levels were hit
+            tp1_size/tp2_size/tp3_size: Fraction to sell at each TP
+            atr_pct: ATR percentage for trailing stop
+            trailing_stop_enabled: Whether trailing stop is active
+            trade_id: Reference to the entry trade
 
         Returns:
             True if successful
         """
         try:
-            total_value = quantity * current_price
-            pnl = (current_price - avg_buy_price) * quantity
+            if remaining_quantity is None:
+                remaining_quantity = quantity
+
+            total_value = remaining_quantity * current_price
+            pnl = (current_price - avg_buy_price) * remaining_quantity
             pnl_percentage = ((current_price - avg_buy_price) / avg_buy_price) * 100 if avg_buy_price > 0 else 0
 
             # Check if position exists
@@ -489,29 +514,56 @@ class DatabaseManager:
                 query = """
                 UPDATE positions
                 SET quantity = :quantity,
+                    remaining_quantity = :remaining_quantity,
                     avg_buy_price = :avg_buy_price,
                     current_price = :current_price,
                     total_value = :total_value,
                     pnl = :pnl,
                     pnl_percentage = :pnl_percentage,
+                    stop_loss = :stop_loss,
+                    tp1 = :tp1, tp1_hit = :tp1_hit, tp1_size = :tp1_size,
+                    tp2 = :tp2, tp2_hit = :tp2_hit, tp2_size = :tp2_size,
+                    tp3 = :tp3, tp3_hit = :tp3_hit, tp3_size = :tp3_size,
+                    atr_pct = :atr_pct,
+                    trailing_stop_enabled = :trailing_stop_enabled,
                     last_update = :last_update
                 WHERE ticker = :ticker
                 """
             else:
                 # Insert new position
                 query = """
-                INSERT INTO positions (ticker, quantity, avg_buy_price, current_price, total_value, pnl, pnl_percentage, last_update)
-                VALUES (:ticker, :quantity, :avg_buy_price, :current_price, :total_value, :pnl, :pnl_percentage, :last_update)
+                INSERT INTO positions (
+                    ticker, quantity, remaining_quantity, avg_buy_price,
+                    current_price, total_value, pnl, pnl_percentage,
+                    stop_loss, tp1, tp1_hit, tp1_size, tp2, tp2_hit, tp2_size,
+                    tp3, tp3_hit, tp3_size, atr_pct, trailing_stop_enabled,
+                    trade_id, entry_time, last_update
+                ) VALUES (
+                    :ticker, :quantity, :remaining_quantity, :avg_buy_price,
+                    :current_price, :total_value, :pnl, :pnl_percentage,
+                    :stop_loss, :tp1, :tp1_hit, :tp1_size, :tp2, :tp2_hit, :tp2_size,
+                    :tp3, :tp3_hit, :tp3_size, :atr_pct, :trailing_stop_enabled,
+                    :trade_id, :entry_time, :last_update
+                )
                 """
 
             params = {
                 'ticker': ticker,
                 'quantity': quantity,
+                'remaining_quantity': remaining_quantity,
                 'avg_buy_price': avg_buy_price,
                 'current_price': current_price,
                 'total_value': total_value,
                 'pnl': pnl,
                 'pnl_percentage': pnl_percentage,
+                'stop_loss': stop_loss,
+                'tp1': tp1, 'tp1_hit': tp1_hit, 'tp1_size': tp1_size,
+                'tp2': tp2, 'tp2_hit': tp2_hit, 'tp2_size': tp2_size,
+                'tp3': tp3, 'tp3_hit': tp3_hit, 'tp3_size': tp3_size,
+                'atr_pct': atr_pct,
+                'trailing_stop_enabled': trailing_stop_enabled,
+                'trade_id': trade_id,
+                'entry_time': datetime.utcnow(),
                 'last_update': datetime.utcnow()
             }
 

@@ -26,21 +26,19 @@ export default function Positions() {
   const openColumns = [
     { key: 'ticker', label: 'Ticker', render: (v, row) => v || row.symbol },
     {
-      key: 'side',
+      key: 'ticker',
       label: 'Side',
-      render: (v) => (
-        <Badge variant={v === 'LONG' || v === 'BUY' ? 'success' : 'danger'}>
-          {v}
-        </Badge>
+      render: () => (
+        <Badge variant="success">LONG</Badge>
       ),
     },
-    { key: 'entry_price', label: 'Entry', render: (v) => v != null ? `$${Number(v).toFixed(4)}` : '—' },
+    { key: 'avg_buy_price', label: 'Entry', render: (v) => v != null ? `$${Number(v).toFixed(4)}` : '—' },
     { key: 'current_price', label: 'Current', render: (v) => v != null ? `$${Number(v).toFixed(4)}` : '—' },
     {
-      key: 'pnl',
+      key: 'pnl_percentage',
       label: 'PnL',
       render: (v, row) => {
-        const pnl = v ?? row.unrealized_pnl;
+        const pnl = v ?? row.pnl;
         if (pnl == null) return '—';
         const num = Number(pnl);
         return (
@@ -51,7 +49,32 @@ export default function Positions() {
       },
     },
     {
-      key: 'opened_at',
+      key: 'total_value',
+      label: 'Value',
+      render: (v) => v != null ? `$${Number(v).toFixed(2)}` : '—',
+    },
+    {
+      key: 'stop_loss',
+      label: 'SL',
+      render: (v) => v != null ? `$${Number(v).toFixed(4)}` : '—',
+    },
+    {
+      key: 'tp1_hit',
+      label: 'TP',
+      render: (v, row) => {
+        const tp1 = row.tp1_hit ? '1' : '';
+        const tp2 = row.tp2_hit ? '2' : '';
+        const tp3 = row.tp3_hit ? '3' : '';
+        const hits = [tp1, tp2, tp3].filter(Boolean).join(',');
+        return hits ? (
+          <Badge variant="success">TP{hits}</Badge>
+        ) : (
+          <span className="text-text-tertiary">—</span>
+        );
+      },
+    },
+    {
+      key: 'entry_time',
       label: 'Opened',
       render: (v) => v ? format(new Date(v), 'MMM dd HH:mm') : '—',
     },
@@ -60,21 +83,19 @@ export default function Positions() {
   const closedColumns = [
     { key: 'ticker', label: 'Ticker', render: (v, row) => v || row.symbol },
     {
-      key: 'side',
+      key: 'ticker',
       label: 'Side',
-      render: (v) => (
-        <Badge variant={v === 'LONG' || v === 'BUY' ? 'success' : 'danger'}>
-          {v}
-        </Badge>
+      render: () => (
+        <Badge variant="success">LONG</Badge>
       ),
     },
     { key: 'entry_price', label: 'Entry', render: (v) => v != null ? `$${Number(v).toFixed(4)}` : '—' },
     { key: 'exit_price', label: 'Exit', render: (v) => v != null ? `$${Number(v).toFixed(4)}` : '—' },
     {
-      key: 'pnl',
+      key: 'pnl_percentage',
       label: 'PnL',
       render: (v, row) => {
-        const pnl = v ?? row.realized_pnl;
+        const pnl = v ?? row.pnl;
         if (pnl == null) return '—';
         const num = Number(pnl);
         return (
@@ -85,7 +106,7 @@ export default function Positions() {
       },
     },
     {
-      key: 'closed_at',
+      key: 'exit_time',
       label: 'Closed',
       render: (v) => v ? format(new Date(v), 'MMM dd HH:mm') : '—',
     },

@@ -525,12 +525,26 @@ class TradingBot:
             probability=probability  # Save model confidence
         )
 
-        # Update positions table in database
+        # Update positions table in database (full state)
         self.db.upsert_position(
             ticker=ticker,
             quantity=executed_qty,
             avg_buy_price=executed_price,
-            current_price=executed_price
+            current_price=executed_price,
+            remaining_quantity=executed_qty,
+            stop_loss=tp_sl['stop_loss'],
+            tp1=tp_sl['tp1'],
+            tp1_hit=False,
+            tp1_size=tp_sl['tp1_size'],
+            tp2=tp_sl['tp2'],
+            tp2_hit=False,
+            tp2_size=tp_sl['tp2_size'],
+            tp3=tp_sl['tp3'],
+            tp3_hit=False,
+            tp3_size=tp_sl['tp3_size'],
+            atr_pct=tp_sl['atr_pct'],
+            trailing_stop_enabled=tp_sl['trailing_stop_enabled'],
+            trade_id=trade_id,
         )
 
         # 10. Update position tracking with dynamic TP/SL data
@@ -694,7 +708,7 @@ class TradingBot:
                     del self.positions[ticker]
                     continue
 
-                # 8. Update position in database
+                # 8. Sync full position state to database
                 self.db.execute_command(
                     """
                     UPDATE positions
@@ -702,6 +716,12 @@ class TradingBot:
                         total_value = :total_value,
                         pnl = :pnl,
                         pnl_percentage = :pnl_pct,
+                        remaining_quantity = :remaining_quantity,
+                        stop_loss = :stop_loss,
+                        tp1_hit = :tp1_hit,
+                        tp2_hit = :tp2_hit,
+                        tp3_hit = :tp3_hit,
+                        trailing_stop_active = :trailing_stop_active,
                         last_update = :last_update
                     WHERE ticker = :ticker
                     """,
@@ -710,7 +730,13 @@ class TradingBot:
                         'current_price': current_price,
                         'total_value': current_price * position['remaining_quantity'],
                         'pnl': pnl,
-                        'pnl_pct': pnl_pct / 100,
+                        'pnl_pct': pnl_pct,
+                        'remaining_quantity': position['remaining_quantity'],
+                        'stop_loss': position['stop_loss'],
+                        'tp1_hit': position.get('tp1_hit', False),
+                        'tp2_hit': position.get('tp2_hit', False),
+                        'tp3_hit': position.get('tp3_hit', False),
+                        'trailing_stop_active': position.get('trailing_stop_active', False),
                         'last_update': datetime.utcnow()
                     }
                 )
