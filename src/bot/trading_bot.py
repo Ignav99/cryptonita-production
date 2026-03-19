@@ -551,6 +551,9 @@ class TradingBot:
             'tp3_size': tp_sl['tp3_size'],
             'atr_pct': tp_sl['atr_pct'],
             'trailing_stop_enabled': tp_sl['trailing_stop_enabled'],
+            'trailing_activation': tp_sl.get('trailing_activation', 0.05),
+            'trailing_atr_mult': tp_sl.get('trailing_atr_mult', 1.5),
+            'tier': tp_sl.get('tier', 3),
             'trailing_stop_active': False,
             'entry_features': signal.get('features', {}),  # Save entry features for comparison
             'trade_id': trade_id,
@@ -622,26 +625,7 @@ class TradingBot:
                     logger.warning(f"⚠️ Could not get current features for {ticker}: {e}")
                     current_features = {}
 
-                # 4. Apply Trailing Stop Loss
-                if position['trailing_stop_enabled']:
-                    new_stop_loss, activated = self.risk_manager.calculate_trailing_stop(
-                        entry_price=position['entry_price'],
-                        current_price=current_price,
-                        current_stop_loss=position['stop_loss'],
-                        atr_pct=position.get('atr_pct', 0.03)
-                    )
-
-                    if activated:
-                        old_sl = position['stop_loss']
-                        position['stop_loss'] = new_stop_loss
-                        position['trailing_stop_active'] = True
-                        logger.info(f"🔼 {ticker} Trailing SL: ${old_sl:.4f} → ${new_stop_loss:.4f}")
-
-                        # Update OCO order with new stop loss
-                        # Note: Binance requires canceling old OCO and creating new one
-                        # For simplicity, we'll just track it here
-
-                # 5. Check intelligent exit conditions
+                # 4. Build tp_levels dict (used by both trailing stop and exit logic)
                 tp_levels = {
                     'tp1': position['tp1'],
                     'tp1_hit': position['tp1_hit'],
@@ -651,8 +635,27 @@ class TradingBot:
                     'tp2_size': position['tp2_size'],
                     'tp3': position['tp3'],
                     'tp3_hit': position['tp3_hit'],
-                    'tp3_size': position['tp3_size']
+                    'tp3_size': position['tp3_size'],
+                    # Tier-aware trailing params (from position or defaults)
+                    'trailing_activation': position.get('trailing_activation', 0.05),
+                    'trailing_atr_mult': position.get('trailing_atr_mult', 1.5),
                 }
+
+                # 5. Apply Trailing Stop Loss (tier-aware)
+                if position['trailing_stop_enabled']:
+                    new_stop_loss, activated = self.risk_manager.calculate_trailing_stop(
+                        entry_price=position['entry_price'],
+                        current_price=current_price,
+                        current_stop_loss=position['stop_loss'],
+                        atr_pct=position.get('atr_pct', 0.03),
+                        tp_levels=tp_levels,
+                    )
+
+                    if activated:
+                        old_sl = position['stop_loss']
+                        position['stop_loss'] = new_stop_loss
+                        position['trailing_stop_active'] = True
+                        logger.info(f"Trailing SL {ticker}: ${old_sl:.4f} -> ${new_stop_loss:.4f}")
 
                 exit_decision = self.risk_manager.check_exit_conditions(
                     ticker=ticker,
