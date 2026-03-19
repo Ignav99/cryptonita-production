@@ -71,9 +71,11 @@ class KellyPositionSizer:
         regime_data: Optional[Dict] = None,
         win_loss_ratio: Optional[float] = None,
         max_position_usd: float = 500.0,
+        kelly_mult: float = 1.0,
+        max_position_pct_override: Optional[float] = None,
     ) -> Dict[str, float]:
         """
-        Calculate position size with Kelly + regime scaling.
+        Calculate position size with Kelly + regime scaling + tier adjustments.
 
         Args:
             current_price: Current asset price
@@ -82,6 +84,8 @@ class KellyPositionSizer:
             regime_data: Dict with regime_name from RegimeDetector
             win_loss_ratio: Historical avg_win/avg_loss
             max_position_usd: Hard cap on position size
+            kelly_mult: Tier-based Kelly multiplier (e.g., 1.2 for blue chips, 0.5 for memes)
+            max_position_pct_override: Tier-based max position % override
 
         Returns:
             Dict with quantity, usd_value, position_pct, kelly_raw
@@ -89,15 +93,21 @@ class KellyPositionSizer:
         # Calculate raw Kelly fraction
         kelly_raw = self.calculate_kelly(probability, win_loss_ratio)
 
+        # Apply tier Kelly multiplier
+        kelly_adjusted = kelly_raw * kelly_mult
+
+        # Use tier max position or default
+        effective_max_pct = max_position_pct_override if max_position_pct_override is not None else self.max_pct
+
         # Clamp to [min, max]
-        position_pct = max(self.min_pct, min(self.max_pct, kelly_raw))
+        position_pct = max(self.min_pct, min(effective_max_pct, kelly_adjusted))
 
         # Apply regime scaling
         regime_mult = self._get_regime_multiplier(regime_data)
         position_pct *= regime_mult
 
         # Re-clamp after regime scaling
-        position_pct = max(self.min_pct, min(self.max_pct, position_pct))
+        position_pct = max(self.min_pct, min(effective_max_pct, position_pct))
 
         # Calculate USD value
         usd_value = portfolio_value * position_pct
@@ -111,11 +121,12 @@ class KellyPositionSizer:
             "usd_value": usd_value,
             "position_pct": position_pct * 100,
             "kelly_raw": kelly_raw,
+            "kelly_mult": kelly_mult,
             "regime_multiplier": regime_mult,
         }
 
         logger.debug(
-            f"Kelly: raw={kelly_raw:.4f}, pct={position_pct*100:.1f}%, "
+            f"Kelly: raw={kelly_raw:.4f}, mult={kelly_mult}x, pct={position_pct*100:.1f}%, "
             f"regime={regime_mult:.1f}x, usd=${usd_value:.2f}"
         )
 

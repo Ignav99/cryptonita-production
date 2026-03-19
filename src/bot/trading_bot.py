@@ -418,12 +418,15 @@ class TradingBot:
             logger.warning(f"⚠️ Trade blocked: {reason}")
             return
 
-        # 4. Calculate position size
-        position_info = self.predictor.calculate_position_size(
+        # 4. Calculate position size (V4 uses ticker for tier-based sizing)
+        size_kwargs = dict(
             current_price=current_price,
             portfolio_value=portfolio_value,
-            probability=probability
+            probability=probability,
         )
+        if hasattr(self.predictor, '_get_ticker_profile'):
+            size_kwargs["ticker"] = ticker
+        position_info = self.predictor.calculate_position_size(**size_kwargs)
 
         quantity = position_info['quantity']
         usd_value = position_info['usd_value']

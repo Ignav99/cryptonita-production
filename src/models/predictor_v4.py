@@ -23,6 +23,9 @@ from src.data.derivatives_fetcher import DerivativesFetcher
 from src.data.onchain_fetcher import OnChainFetcher
 from src.data.sentiment_fetcher import SentimentFetcher
 from src.data.defi_fetcher import DeFiFetcher
+from src.data.news_fetcher import NewsFetcher
+from src.data.social_fetcher import SocialFetcher
+from src.data.whale_fetcher import WhaleFetcher
 from src.models.ensemble import EnsembleModel
 from src.models.regime_detector import RegimeDetector
 from src.models.position_sizer import KellyPositionSizer
@@ -55,19 +58,27 @@ class TradingPredictorV4:
         self.onchain_fetcher = OnChainFetcher()
         self.sentiment_fetcher = SentimentFetcher()
         self.defi_fetcher = DeFiFetcher()
+        self.news_fetcher = NewsFetcher()
+        self.social_fetcher = SocialFetcher()
+        self.whale_fetcher = WhaleFetcher()
 
         # Initialize position sizer
         kelly_fraction = getattr(settings, "KELLY_FRACTION", 0.25)
         self.position_sizer = KellyPositionSizer(kelly_fraction=kelly_fraction)
 
         # Trading parameters
-        self.threshold = settings.PREDICTION_THRESHOLD
+        self.threshold = settings.PREDICTION_THRESHOLD  # Default fallback
+        self.risk_profiles = settings.COIN_RISK_PROFILES
+        self.default_profile = settings.DEFAULT_RISK_PROFILE
 
         # Cache for external data (refreshed each scan cycle)
         self._cached_external = None
         self._cached_regime = None
 
-        logger.info(f"TradingPredictorV4 initialized — Threshold: {self.threshold}")
+        logger.info(
+            f"TradingPredictorV4 initialized — Default threshold: {self.threshold}, "
+            f"Dynamic profiles: {len(self.risk_profiles)} tickers"
+        )
 
     def _load_models(self):
         """Load models: try DB first, then filesystem."""
@@ -142,14 +153,25 @@ class TradingPredictorV4:
         """Flag that a reload is needed (called by auto-trainer after promotion)."""
         self._needs_reload = True
 
+    def _get_ticker_profile(self, ticker: str) -> Dict:
+        """Get risk profile for a specific ticker"""
+        return self.risk_profiles.get(ticker, self.default_profile)
+
+    def _get_ticker_threshold(self, ticker: str) -> float:
+        """Get dynamic threshold for a specific ticker"""
+        return self._get_ticker_profile(ticker)["threshold"]
+
     async def _fetch_external_data(self) -> Dict[str, Dict]:
         """Fetch all external data sources concurrently"""
-        macro, derivatives, onchain, sentiment, defi = await asyncio.gather(
+        macro, derivatives, onchain, sentiment, defi, news, social, whale = await asyncio.gather(
             self.macro_fetcher.get_all_macro_data(),
             self.derivatives_fetcher.get_all_derivatives_data(),
             self.onchain_fetcher.get_all_onchain_data(),
             self.sentiment_fetcher.get_all_sentiment_data(),
             self.defi_fetcher.get_all_defi_data(),
+            self.news_fetcher.get_all_news_data(),
+            self.social_fetcher.get_all_social_data(),
+            self.whale_fetcher.get_all_whale_data(),
             return_exceptions=True,
         )
 
@@ -159,6 +181,9 @@ class TradingPredictorV4:
             "onchain": onchain if isinstance(onchain, dict) else {},
             "sentiment": sentiment if isinstance(sentiment, dict) else {},
             "defi": defi if isinstance(defi, dict) else {},
+            "news": news if isinstance(news, dict) else {},
+            "social": social if isinstance(social, dict) else {},
+            "whale": whale if isinstance(whale, dict) else {},
         }
 
     def _fetch_external_data_sync(self) -> Dict[str, Dict]:
@@ -208,6 +233,15 @@ class TradingPredictorV4:
             if btc_data is not None and self.regime_detector.model is not None:
                 self._cached_regime = self.regime_detector.predict(btc_data)
 
+            # Build ticker-specific news/social/whale data
+            ticker_news = self.news_fetcher.get_ticker_features(
+                ticker, ext.get("news", {})
+            ) if hasattr(self, 'news_fetcher') else {}
+            ticker_social = self.social_fetcher.get_ticker_features(
+                ticker, ext.get("social", {})
+            ) if hasattr(self, 'social_fetcher') else {}
+            ticker_whale = ext.get("whale", {})
+
             # Calculate V4 features
             feature_vector = self.feature_engineer.calculate_single_prediction_features_v4(
                 ticker_data=ohlcv_data,
@@ -218,6 +252,9 @@ class TradingPredictorV4:
                 sentiment_data=ext.get("sentiment"),
                 defi_data=ext.get("defi"),
                 regime_data=self._cached_regime,
+                news_data=ticker_news,
+                social_data=ticker_social,
+                whale_data=ticker_whale,
             )
 
             if feature_vector is None:
@@ -228,8 +265,10 @@ class TradingPredictorV4:
             X = feature_vector.reshape(1, -1)
             probability = float(self.ensemble.predict_proba(X)[0])
 
-            # Make decision
-            prediction = 1 if probability >= self.threshold else 0
+            # Use dynamic threshold per ticker
+            profile = self._get_ticker_profile(ticker)
+            ticker_threshold = profile["threshold"]
+            prediction = 1 if probability >= ticker_threshold else 0
 
             # Features dict for logging
             feature_names = self.feature_engineer.selected_features or self.feature_engineer.required_features_v4
@@ -240,7 +279,10 @@ class TradingPredictorV4:
 
             signal_type = "BUY" if prediction == 1 else "HOLD"
             regime = self._cached_regime.get("regime_name", "?") if self._cached_regime else "?"
-            logger.info(f"[V4] {ticker}: {signal_type} (p={probability:.4f}, regime={regime})")
+            logger.info(
+                f"[V4] {ticker}: {signal_type} (p={probability:.4f}, "
+                f"threshold={ticker_threshold}, tier={profile['tier']}, regime={regime})"
+            )
 
             return prediction, probability, features_dict
 
@@ -309,8 +351,13 @@ class TradingPredictorV4:
         daily_loss: float,
     ) -> Tuple[bool, str]:
         """Same interface as TradingPredictor.should_trade"""
-        if probability < self.threshold:
-            return False, f"Probability {probability:.4f} below threshold {self.threshold}"
+        profile = self._get_ticker_profile(ticker)
+        ticker_threshold = profile["threshold"]
+        if probability < ticker_threshold:
+            return False, (
+                f"Probability {probability:.4f} below threshold "
+                f"{ticker_threshold} (tier {profile['tier']})"
+            )
 
         if current_positions >= settings.MAX_POSITIONS:
             return False, f"Max positions reached ({settings.MAX_POSITIONS})"
@@ -335,17 +382,20 @@ class TradingPredictorV4:
         current_price: float,
         portfolio_value: float,
         probability: float,
+        ticker: str = "",
     ) -> Dict[str, float]:
         """
-        Calculate position size using Kelly Criterion.
-        Same interface as TradingPredictor.calculate_position_size.
+        Calculate position size using Kelly Criterion with tier-based adjustments.
         """
+        profile = self._get_ticker_profile(ticker)
         result = self.position_sizer.calculate_position_size(
             current_price=current_price,
             portfolio_value=portfolio_value,
             probability=probability,
             regime_data=self._cached_regime,
             max_position_usd=settings.MAX_POSITION_SIZE_USD,
+            kelly_mult=profile["kelly_mult"],
+            max_position_pct_override=profile["max_position_pct"],
         )
 
         return {

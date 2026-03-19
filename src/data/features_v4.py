@@ -1,7 +1,7 @@
 """
 FEATURE ENGINEERING V4
 =======================
-Extends V3 FeatureEngineer (48 features) with ~32 new features for a total of ~80.
+Extends V3 FeatureEngineer (48 features) with ~41 new features for a total of ~89.
 
 New feature groups:
 - Derivatives (6): funding_rate_zscore, oi_change_24h, long_short_ratio, etc.
@@ -11,6 +11,9 @@ New feature groups:
 - Cross-Asset (4): btc_dominance_change, eth_btc_momentum, etc.
 - Advanced TA (6): rsi_14, macd_signal, bb_width, bb_position, adx_14, mfi_14
 - Regime (4): hmm_state, regime_bull_prob, regime_bear_prob, volatility_regime
+- News (3): news_sentiment_24h, news_count_24h, news_impact_score
+- Social (3): reddit_mentions_24h, reddit_sentiment, social_buzz_score
+- Whale (3): whale_tx_count_24h, whale_net_flow, whale_activity_score
 """
 
 import json
@@ -68,6 +71,12 @@ class FeatureEngineerV4(FeatureEngineer):
             "rsi_14", "macd_signal", "bb_width", "bb_position", "adx_14", "mfi_14",
             # Regime
             "hmm_state", "regime_bull_prob", "regime_bear_prob", "volatility_regime",
+            # News (RSS)
+            "news_sentiment_24h", "news_count_24h", "news_impact_score",
+            # Social (Reddit)
+            "reddit_mentions_24h", "reddit_sentiment", "social_buzz_score",
+            # Whale
+            "whale_tx_count_24h", "whale_net_flow", "whale_activity_score",
         ]
 
     # ------------------------------------------------------------------
@@ -85,9 +94,12 @@ class FeatureEngineerV4(FeatureEngineer):
         sentiment_data: Optional[Dict] = None,
         defi_data: Optional[Dict] = None,
         regime_data: Optional[Dict] = None,
+        news_data: Optional[Dict] = None,
+        social_data: Optional[Dict] = None,
+        whale_data: Optional[Dict] = None,
     ) -> pd.DataFrame:
         """
-        Calculate all ~80 features (V3 base + V4 extensions).
+        Calculate all ~89 features (V3 base + V4 extensions + news/social/whale).
 
         Returns DataFrame with NaN for unavailable features (tree models handle this).
         """
@@ -119,6 +131,11 @@ class FeatureEngineerV4(FeatureEngineer):
         df = self._calculate_cross_asset_features(df, btc_df, eth_df)
         df = self._calculate_advanced_ta_features(df)
         df = self._calculate_regime_features(df, regime_data)
+
+        # --- V4.1 new features (news, social, whale) ---
+        df = self._calculate_news_features(df, news_data)
+        df = self._calculate_social_features(df, social_data)
+        df = self._calculate_whale_features(df, whale_data)
 
         # Replace inf with NaN (tree models handle NaN natively)
         df = df.replace([np.inf, -np.inf], np.nan)
@@ -319,6 +336,33 @@ class FeatureEngineerV4(FeatureEngineer):
 
         return df
 
+    def _calculate_news_features(self, df: pd.DataFrame, data: Optional[Dict]) -> pd.DataFrame:
+        """News features (3) — from NewsFetcher per-ticker data"""
+        if data is None:
+            data = {}
+        df["news_sentiment_24h"] = data.get("news_sentiment_24h", np.nan)
+        df["news_count_24h"] = data.get("news_count_24h", np.nan)
+        df["news_impact_score"] = data.get("news_impact_score", np.nan)
+        return df
+
+    def _calculate_social_features(self, df: pd.DataFrame, data: Optional[Dict]) -> pd.DataFrame:
+        """Social features (3) — from SocialFetcher per-ticker data"""
+        if data is None:
+            data = {}
+        df["reddit_mentions_24h"] = data.get("reddit_mentions_24h", np.nan)
+        df["reddit_sentiment"] = data.get("reddit_sentiment", np.nan)
+        df["social_buzz_score"] = data.get("social_buzz_score", np.nan)
+        return df
+
+    def _calculate_whale_features(self, df: pd.DataFrame, data: Optional[Dict]) -> pd.DataFrame:
+        """Whale features (3) — from WhaleFetcher"""
+        if data is None:
+            data = {}
+        df["whale_tx_count_24h"] = data.get("whale_tx_count_24h", np.nan)
+        df["whale_net_flow"] = data.get("whale_net_flow", np.nan)
+        df["whale_activity_score"] = data.get("whale_activity_score", np.nan)
+        return df
+
     # ------------------------------------------------------------------
     # Feature extraction
     # ------------------------------------------------------------------
@@ -350,6 +394,9 @@ class FeatureEngineerV4(FeatureEngineer):
         sentiment_data: Optional[Dict] = None,
         defi_data: Optional[Dict] = None,
         regime_data: Optional[Dict] = None,
+        news_data: Optional[Dict] = None,
+        social_data: Optional[Dict] = None,
+        whale_data: Optional[Dict] = None,
     ) -> Optional[np.ndarray]:
         """Calculate V4 features for a single prediction (latest datapoint)"""
         try:
@@ -363,6 +410,9 @@ class FeatureEngineerV4(FeatureEngineer):
                 sentiment_data=sentiment_data,
                 defi_data=defi_data,
                 regime_data=regime_data,
+                news_data=news_data,
+                social_data=social_data,
+                whale_data=whale_data,
             )
             if len(df) == 0:
                 return None

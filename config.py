@@ -6,7 +6,7 @@ Centralized configuration management using Pydantic Settings
 
 import os
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 from pydantic_settings import BaseSettings
 from pydantic import Field, validator
 from dotenv import load_dotenv
@@ -111,6 +111,82 @@ class Settings(BaseSettings):
         "DOTUSDT", "ATOMUSDT", "ADAUSDT", "POLUSDT", "LINKUSDT",  # POL is MATIC rebranded
         "ICPUSDT", "FILUSDT", "HBARUSDT", "VETUSDT", "ALGOUSDT"
     ]
+
+    # ============================================
+    # COIN RISK PROFILES (Tier-based dynamic thresholds)
+    # ============================================
+    # Tier 1 (Blue Chip): lower threshold, bigger positions
+    # Tier 4 (Meme/Small): higher threshold, smaller positions
+    COIN_RISK_PROFILES: Dict[str, Dict] = {
+        # TIER 1 — Blue Chip (established, lower risk)
+        "LINKUSDT": {"tier": 1, "threshold": 0.93, "max_position_pct": 0.15, "kelly_mult": 1.2},
+        "DOTUSDT":  {"tier": 1, "threshold": 0.93, "max_position_pct": 0.15, "kelly_mult": 1.2},
+        "ADAUSDT":  {"tier": 1, "threshold": 0.93, "max_position_pct": 0.15, "kelly_mult": 1.2},
+        "ATOMUSDT": {"tier": 1, "threshold": 0.93, "max_position_pct": 0.15, "kelly_mult": 1.2},
+        "POLUSDT":  {"tier": 1, "threshold": 0.93, "max_position_pct": 0.15, "kelly_mult": 1.2},
+        # TIER 2 — Large Cap
+        "SOLUSDT":  {"tier": 2, "threshold": 0.95, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "AVAXUSDT": {"tier": 2, "threshold": 0.95, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "NEARUSDT": {"tier": 2, "threshold": 0.95, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "UNIUSDT":  {"tier": 2, "threshold": 0.95, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "AAVEUSDT": {"tier": 2, "threshold": 0.95, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "ICPUSDT":  {"tier": 2, "threshold": 0.95, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "HBARUSDT": {"tier": 2, "threshold": 0.95, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        # TIER 3 — Mid Cap (higher volatility)
+        "ARBUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "OPUSDT":   {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "INJUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "SUIUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "SEIUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "APTUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "LDOUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "RUNEUSDT": {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "CRVUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "GMXUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "DYDXUSDT": {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "SANDUSDT": {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "MANAUSDT": {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "AXSUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "IMXUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "GALAUSDT": {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "FETUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "WLDUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "RENDERUSDT": {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "FILUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "VETUSDT":  {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        "ALGOUSDT": {"tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8},
+        # TIER 4 — Meme/Small Cap (highest risk)
+        "DOGEUSDT": {"tier": 4, "threshold": 0.99, "max_position_pct": 0.04, "kelly_mult": 0.5},
+        "SHIBUSDT": {"tier": 4, "threshold": 0.99, "max_position_pct": 0.04, "kelly_mult": 0.5},
+        "PEPEUSDT": {"tier": 4, "threshold": 0.99, "max_position_pct": 0.04, "kelly_mult": 0.5},
+        "FLOKIUSDT": {"tier": 4, "threshold": 0.99, "max_position_pct": 0.04, "kelly_mult": 0.5},
+        "BONKUSDT": {"tier": 4, "threshold": 0.99, "max_position_pct": 0.04, "kelly_mult": 0.5},
+    }
+
+    # Default profile for tickers not in the map
+    DEFAULT_RISK_PROFILE: Dict = {
+        "tier": 3, "threshold": 0.97, "max_position_pct": 0.08, "kelly_mult": 0.8
+    }
+
+    # ============================================
+    # TICKER DISPLAY NAMES (for news/social matching)
+    # ============================================
+    TICKER_DISPLAY_NAMES: Dict[str, str] = {
+        "SOLUSDT": "Solana", "AVAXUSDT": "Avalanche", "NEARUSDT": "NEAR",
+        "APTUSDT": "Aptos", "SUIUSDT": "Sui", "SEIUSDT": "Sei",
+        "ARBUSDT": "Arbitrum", "OPUSDT": "Optimism", "INJUSDT": "Injective",
+        "UNIUSDT": "Uniswap", "AAVEUSDT": "Aave", "LDOUSDT": "Lido",
+        "RUNEUSDT": "THORChain", "CRVUSDT": "Curve", "GMXUSDT": "GMX",
+        "DYDXUSDT": "dYdX", "SANDUSDT": "Sandbox", "MANAUSDT": "Decentraland",
+        "AXSUSDT": "Axie", "IMXUSDT": "Immutable", "GALAUSDT": "Gala",
+        "FETUSDT": "Fetch.ai", "WLDUSDT": "Worldcoin", "RENDERUSDT": "Render",
+        "DOGEUSDT": "Dogecoin", "SHIBUSDT": "Shiba", "PEPEUSDT": "Pepe",
+        "FLOKIUSDT": "Floki", "BONKUSDT": "Bonk",
+        "DOTUSDT": "Polkadot", "ATOMUSDT": "Cosmos", "ADAUSDT": "Cardano",
+        "POLUSDT": "Polygon", "LINKUSDT": "Chainlink", "ICPUSDT": "Internet Computer",
+        "FILUSDT": "Filecoin", "HBARUSDT": "Hedera", "VETUSDT": "VeChain",
+        "ALGOUSDT": "Algorand",
+    }
 
     # ============================================
     # MODEL CONFIGURATION
