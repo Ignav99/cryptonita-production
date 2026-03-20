@@ -6,7 +6,7 @@ Handles all database operations for Cryptonita Production
 
 import json
 from typing import Dict, List, Any, Optional
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import QueuePool
@@ -247,17 +247,18 @@ class DatabaseManager:
         Returns:
             DataFrame with filtered signals
         """
+        cutoff = datetime.utcnow() - timedelta(days=days)
         query = """
         SELECT * FROM signals
         WHERE probability >= :min_probability
-          AND timestamp >= NOW() - :days * INTERVAL '1 day'
+          AND timestamp >= :cutoff
         ORDER BY probability DESC, timestamp DESC
         LIMIT :limit
         """
         return self.execute_query(query, {
             'limit': limit,
             'min_probability': min_probability,
-            'days': days
+            'cutoff': cutoff
         })
 
     def get_all_latest_signals(self) -> pd.DataFrame:
@@ -271,16 +272,18 @@ class DatabaseManager:
 
     def get_signal_history(self, days: int = 14) -> pd.DataFrame:
         """Get all signals for the last N days for trend analysis"""
+        cutoff = datetime.utcnow() - timedelta(days=days)
         query = """
         SELECT id, ticker, signal_type, probability, timestamp
         FROM signals
-        WHERE timestamp >= NOW() - :days * INTERVAL '1 day'
+        WHERE timestamp >= :cutoff
         ORDER BY timestamp ASC
         """
-        return self.execute_query(query, {'days': days})
+        return self.execute_query(query, {'cutoff': cutoff})
 
     def get_signals_stats(self, days: int = 7) -> pd.DataFrame:
         """Get signal counts per ticker for the last N days"""
+        cutoff = datetime.utcnow() - timedelta(days=days)
         query = """
         SELECT
             ticker,
@@ -288,11 +291,11 @@ class DatabaseManager:
             COUNT(*) FILTER (WHERE signal_type = 'BUY') as buy_count,
             COUNT(*) FILTER (WHERE signal_type = 'HOLD') as hold_count
         FROM signals
-        WHERE timestamp >= NOW() - :days * INTERVAL '1 day'
+        WHERE timestamp >= :cutoff
         GROUP BY ticker
         ORDER BY total_count DESC
         """
-        return self.execute_query(query, {'days': days})
+        return self.execute_query(query, {'cutoff': cutoff})
 
     # ============================================
     # TRADES

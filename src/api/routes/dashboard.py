@@ -13,6 +13,7 @@ from src.api.schemas.dashboard import (
     SignalsSummaryStats, ThresholdProximity,
 )
 import pandas as pd
+from loguru import logger
 from src.data.storage.db_manager import DatabaseManager
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
@@ -87,6 +88,7 @@ async def get_signals_summary(current_user: dict = Depends(get_current_user)):
         display_names = settings.TICKER_DISPLAY_NAMES
 
         latest_df = db.get_all_latest_signals()
+        logger.info(f"📊 /signals/summary: found {len(latest_df)} latest signals")
         if len(latest_df) == 0:
             return SignalsSummaryStats(
                 total_coins_scanned=0, buy_signals_count=0, hold_signals_count=0,
@@ -118,6 +120,7 @@ async def get_signals_summary(current_user: dict = Depends(get_current_user)):
             last_scan_time=last_scan,
         )
     except Exception as e:
+        logger.error(f"❌ /signals/summary error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -130,6 +133,7 @@ async def get_coin_summaries(current_user: dict = Depends(get_current_user)):
         display_names = settings.TICKER_DISPLAY_NAMES
 
         latest_df = db.get_all_latest_signals()
+        logger.info(f"📊 /signals/coins: found {len(latest_df)} latest signals")
         stats_df = db.get_signals_stats(days=7)
         history_df = db.get_signal_history(days=14)
 
@@ -174,8 +178,10 @@ async def get_coin_summaries(current_user: dict = Depends(get_current_user)):
             ))
 
         results.sort(key=lambda x: x.latest_probability, reverse=True)
+        logger.info(f"📊 /signals/coins: returning {len(results)} coin summaries")
         return results
     except Exception as e:
+        logger.error(f"❌ /signals/coins error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -219,6 +225,7 @@ async def get_signal_trends(
 
         return results
     except Exception as e:
+        logger.error(f"❌ /signals/trends error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -255,6 +262,7 @@ async def get_threshold_proximity(current_user: dict = Depends(get_current_user)
         results.sort(key=lambda x: abs(x.distance_pct))
         return results
     except Exception as e:
+        logger.error(f"❌ /signals/thresholds error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -270,6 +278,7 @@ async def get_recent_signals(
         display_names = settings.TICKER_DISPLAY_NAMES
 
         signals_df = db.get_recent_signals(limit=limit)
+        logger.info(f"📊 /signals: found {len(signals_df)} signals (limit={limit})")
         results = []
         for _, row in signals_df.iterrows():
             ticker = row['ticker']
@@ -290,6 +299,7 @@ async def get_recent_signals(
             ))
         return results
     except Exception as e:
+        logger.error(f"❌ /signals error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

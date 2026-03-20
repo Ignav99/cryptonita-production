@@ -39,29 +39,33 @@ export default function Signals() {
   const [tierFilter, setTierFilter] = useState('ALL');
   const [selectedTickers, setSelectedTickers] = useState([]);
 
-  const { data: summary } = useQuery({
+  const { data: summary, isLoading: loadingSummary, error: errorSummary } = useQuery({
     queryKey: ['signals-summary'],
     queryFn: () => dashboard.getSignalsSummary(),
     refetchInterval: 30000,
   });
 
-  const { data: coins } = useQuery({
+  const { data: coins, isLoading: loadingCoins, error: errorCoins } = useQuery({
     queryKey: ['signals-coins'],
     queryFn: () => dashboard.getCoinSummaries(),
     refetchInterval: 30000,
   });
 
-  const { data: signals } = useQuery({
+  const { data: signals, isLoading: loadingSignals, error: errorSignals } = useQuery({
     queryKey: ['signals-all'],
     queryFn: () => dashboard.getSignals(200),
     refetchInterval: 15000,
   });
 
-  const { data: thresholds } = useQuery({
+  const { data: thresholds, isLoading: loadingThresholds, error: errorThresholds } = useQuery({
     queryKey: ['signals-thresholds'],
     queryFn: () => dashboard.getThresholdProximity(),
     refetchInterval: 30000,
   });
+
+  // Debug: show first error in a banner
+  const firstError = errorSummary || errorCoins || errorSignals || errorThresholds;
+  const isLoading = loadingSummary || loadingCoins;
 
   const trendTickers = selectedTickers.length > 0
     ? selectedTickers.join(',')
@@ -209,6 +213,21 @@ export default function Signals() {
 
   return (
     <div className="space-y-4">
+      {/* Error Banner */}
+      {firstError && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg px-4 py-3">
+          <p className="text-sm text-red-400 font-medium">API Error</p>
+          <p className="text-xs text-red-400/80 mt-0.5">
+            {firstError.response?.data?.detail || firstError.message || 'Failed to fetch signals data'}
+          </p>
+        </div>
+      )}
+      {/* Loading Banner */}
+      {isLoading && !firstError && (
+        <div className="bg-accent-blue/10 border border-accent-blue/30 rounded-lg px-4 py-3">
+          <p className="text-sm text-accent-blue">Loading signals data...</p>
+        </div>
+      )}
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
