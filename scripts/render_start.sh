@@ -37,16 +37,49 @@ python scripts/clean_positions.py || echo "⚠️ Position cleaning skipped"
 # Seed model to DB if needed (for V4 model persistence across Render restarts)
 echo "🤖 Checking model artifacts in DB..."
 python -c "
-import sys
+import sys, json
 sys.path.insert(0, '.')
 from config import settings
 if getattr(settings, 'USE_V4_MODEL', False):
     from src.models.model_store import ModelStore
     from pathlib import Path
     store = ModelStore()
+    model_dir = getattr(settings, 'V4_MODEL_DIR', 'PRODUCTION_SYSTEM/models/v4')
+    fs_meta = Path(model_dir) / 'ensemble_metadata.json'
+
+    need_seed = False
     if not store.has_active_model():
-        model_dir = getattr(settings, 'V4_MODEL_DIR', 'PRODUCTION_SYSTEM/models/v4')
-        if Path(model_dir).exists() and (Path(model_dir) / 'ensemble_metadata.json').exists():
+        need_seed = True
+        print('No active model in DB — will seed from filesystem')
+    elif fs_meta.exists():
+        # Check if filesystem model has different feature count than DB model
+        with open(fs_meta) as f:
+            fs_features = json.load(f).get('feature_names', [])
+        # Load DB model to temp dir to check features
+        import tempfile, os
+        tmp = tempfile.mkdtemp()
+        try:
+            store.load_active_ensemble(tmp)
+            db_meta_path = os.path.join(tmp, 'ensemble_metadata.json')
+            if os.path.exists(db_meta_path):
+                with open(db_meta_path) as f:
+                    db_features = json.load(f).get('feature_names', [])
+                if len(fs_features) != len(db_features):
+                    need_seed = True
+                    print(f'Feature mismatch: DB has {len(db_features)}, filesystem has {len(fs_features)} — re-seeding')
+                else:
+                    print(f'Active model in DB matches filesystem ({len(db_features)} features)')
+            else:
+                need_seed = True
+        except Exception as e:
+            print(f'Could not check DB model: {e}')
+            need_seed = True
+        finally:
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    if need_seed:
+        if Path(model_dir).exists() and fs_meta.exists():
             print('Seeding V4 model from filesystem to DB...')
             version = store.get_latest_version() + 1
             store.save_ensemble(version, model_dir)
@@ -54,8 +87,6 @@ if getattr(settings, 'USE_V4_MODEL', False):
             print(f'Seeded model v{version} to DB')
         else:
             print('No filesystem model found — bot will auto-train on first cycle')
-    else:
-        print(f'Active model found in DB (v{store.get_latest_version()})')
 else:
     print('V4 model disabled, skipping model seeding')
 " || echo "⚠️ Model seeding skipped"
