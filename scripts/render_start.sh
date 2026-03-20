@@ -60,14 +60,17 @@ else:
     print('V4 model disabled, skipping model seeding')
 " || echo "⚠️ Model seeding skipped"
 
+# Memory optimization for constrained environments
+export PYTHONDONTWRITEBYTECODE=1
+export MALLOC_TRIM_THRESHOLD_=65536
+
 # Start the API server (which will serve the frontend too)
 echo "🌐 Starting API server..."
 echo "📍 API will be available at: https://cryptonita-bot.onrender.com"
 echo "🤖 Bot can be controlled via the dashboard"
 
 # Use gunicorn for production with uvicorn workers
-# NOTE: 1 worker to fit within Render free tier 512MB RAM
-# (2 workers + V4 ensemble bot exceeds memory limit)
+# 1 worker + preload to share memory across fork
 gunicorn src.api.main:app \
     --workers 1 \
     --worker-class uvicorn.workers.UvicornWorker \
@@ -77,4 +80,5 @@ gunicorn src.api.main:app \
     --error-logfile - \
     --log-level info \
     --max-requests 1000 \
-    --max-requests-jitter 50
+    --max-requests-jitter 50 \
+    --preload

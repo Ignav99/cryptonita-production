@@ -311,6 +311,7 @@ class TradingPredictorV4:
 
         logger.info(f"[V4] Making predictions for {len(tickers_data)} tickers...")
 
+        import gc
         for ticker, ohlcv_data in tickers_data.items():
             prediction, probability, features = self.predict_single(
                 ticker=ticker,
@@ -325,6 +326,10 @@ class TradingPredictorV4:
                 "signal_type": "BUY" if prediction == 1 else "HOLD",
                 "features": features,
             })
+
+        # Free external data cache after batch to reduce peak memory
+        self._cached_external = None
+        gc.collect()
 
         df = pd.DataFrame(results)
         buy_signals = (df["prediction"] == 1).sum()
