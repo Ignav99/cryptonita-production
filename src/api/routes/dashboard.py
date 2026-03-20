@@ -101,7 +101,7 @@ async def get_signals_summary(current_user: dict = Depends(get_current_user)):
         near_count = 0
         for _, row in latest_df.iterrows():
             profile = risk_profiles.get(row['ticker'], default_profile)
-            distance = abs(row['probability'] - profile['threshold'])
+            distance = abs(float(row['probability']) - profile['threshold'])
             if distance <= 0.05:
                 near_count += 1
 
