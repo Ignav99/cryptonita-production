@@ -18,7 +18,7 @@ alembic==1.13.0
 redis==5.0.1
 aioredis==2.0.1
 
-# Machine Learning - Core (versions must match training environment for pickle compat)
+# Machine Learning - Core (sklearn/xgboost/lgbm/catboost pinned to match training pickles)
 xgboost==3.2.0
 scikit-learn==1.8.0
 numpy>=1.26.2

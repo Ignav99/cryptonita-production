@@ -99,7 +99,10 @@ class DatabaseManager:
         """
         try:
             with self.engine.connect() as conn:
-                result = pd.read_sql(text(query), conn, params=params or {})
+                result_proxy = conn.execute(text(query), params or {})
+                rows = result_proxy.fetchall()
+                columns = result_proxy.keys()
+                result = pd.DataFrame(rows, columns=columns)
             return result
         except Exception as e:
             logger.error(f"❌ Failed to execute query: {e}")
