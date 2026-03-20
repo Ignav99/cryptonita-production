@@ -253,5 +253,8 @@ class EnsembleModel:
         if meta_path.exists():
             with open(meta_path, "rb") as f:
                 self.meta_model = pickle.load(f)
+            # Fix sklearn version compatibility (multi_class removed in 1.6+)
+            if hasattr(self.meta_model, '__class__') and not hasattr(self.meta_model, 'multi_class'):
+                self.meta_model.multi_class = 'auto'
 
         logger.info(f"Ensemble loaded: {list(self.base_models.keys())}")
