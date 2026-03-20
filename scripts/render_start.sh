@@ -66,11 +66,15 @@ echo "📍 API will be available at: https://cryptonita-bot.onrender.com"
 echo "🤖 Bot can be controlled via the dashboard"
 
 # Use gunicorn for production with uvicorn workers
+# NOTE: 1 worker to fit within Render free tier 512MB RAM
+# (2 workers + V4 ensemble bot exceeds memory limit)
 gunicorn src.api.main:app \
-    --workers 2 \
+    --workers 1 \
     --worker-class uvicorn.workers.UvicornWorker \
     --bind 0.0.0.0:${API_PORT:-8000} \
-    --timeout 120 \
+    --timeout 300 \
     --access-logfile - \
     --error-logfile - \
-    --log-level info
+    --log-level info \
+    --max-requests 1000 \
+    --max-requests-jitter 50
