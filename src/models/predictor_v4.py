@@ -261,17 +261,6 @@ class TradingPredictorV4:
                 logger.warning(f"Could not calculate V4 features for {ticker}")
                 return 0, 0.0, {}
 
-            # Align features to what the trained model expects
-            model_features = self.ensemble.feature_names
-            current_features = self.feature_engineer.selected_features or self.feature_engineer.required_features_v4
-            if model_features and len(feature_vector) != len(model_features):
-                name_to_idx = {name: i for i, name in enumerate(current_features)}
-                aligned = np.full(len(model_features), np.nan)
-                for i, fname in enumerate(model_features):
-                    if fname in name_to_idx:
-                        aligned[i] = feature_vector[name_to_idx[fname]]
-                feature_vector = aligned
-
             # Get ensemble prediction
             X = feature_vector.reshape(1, -1)
             probability = float(self.ensemble.predict_proba(X)[0])
@@ -281,10 +270,8 @@ class TradingPredictorV4:
             ticker_threshold = profile["threshold"]
             prediction = 1 if probability >= ticker_threshold else 0
 
-            # Features dict for logging (use model features if aligned, else current)
-            log_names = model_features if model_features and len(feature_vector) == len(model_features) else (
-                self.feature_engineer.selected_features or self.feature_engineer.required_features_v4
-            )
+            # Features dict for logging
+            log_names = self.feature_engineer.selected_features or self.feature_engineer.required_features_v4
             features_dict = {
                 name: float(val) if not np.isnan(val) else None
                 for name, val in zip(log_names, feature_vector)

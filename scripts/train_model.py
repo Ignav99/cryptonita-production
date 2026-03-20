@@ -43,6 +43,9 @@ from src.data.derivatives_fetcher import DerivativesFetcher
 from src.data.onchain_fetcher import OnChainFetcher
 from src.data.sentiment_fetcher import SentimentFetcher
 from src.data.defi_fetcher import DeFiFetcher
+from src.data.news_fetcher import NewsFetcher
+from src.data.social_fetcher import SocialFetcher
+from src.data.whale_fetcher import WhaleFetcher
 from src.models.labeling import TripleBarrierLabeler
 from src.models.validation import PurgedWalkForwardCV
 from src.models.ensemble import EnsembleModel
@@ -114,30 +117,38 @@ def fetch_all_data(lookback_days: int, max_tickers: int = 0) -> dict:
 
 
 async def _fetch_external_data() -> dict:
-    """Fetch all external data sources"""
+    """Fetch all external data sources (including news, social, whale)"""
     macro = MacroDataFetcher()
     derivatives = DerivativesFetcher()
     onchain = OnChainFetcher()
     sentiment = SentimentFetcher()
     defi = DeFiFetcher()
+    news = NewsFetcher()
+    social = SocialFetcher()
+    whale = WhaleFetcher()
 
-    macro_data, deriv_data, onchain_data, sentiment_data, defi_data = await asyncio.gather(
+    results = await asyncio.gather(
         macro.get_all_macro_data(),
         derivatives.get_all_derivatives_data(),
         onchain.get_all_onchain_data(),
         sentiment.get_all_sentiment_data(),
         defi.get_all_defi_data(),
+        news.get_all_news_data(),
+        social.get_all_social_data(),
+        whale.get_all_whale_data(),
         return_exceptions=True,
     )
 
-    result = {}
-    result["macro"] = macro_data if isinstance(macro_data, dict) else {}
-    result["derivatives"] = deriv_data if isinstance(deriv_data, dict) else {}
-    result["onchain"] = onchain_data if isinstance(onchain_data, dict) else {}
-    result["sentiment"] = sentiment_data if isinstance(sentiment_data, dict) else {}
-    result["defi"] = defi_data if isinstance(defi_data, dict) else {}
-
-    return result
+    return {
+        "macro": results[0] if isinstance(results[0], dict) else {},
+        "derivatives": results[1] if isinstance(results[1], dict) else {},
+        "onchain": results[2] if isinstance(results[2], dict) else {},
+        "sentiment": results[3] if isinstance(results[3], dict) else {},
+        "defi": results[4] if isinstance(results[4], dict) else {},
+        "news": results[5] if isinstance(results[5], dict) else {},
+        "social": results[6] if isinstance(results[6], dict) else {},
+        "whale": results[7] if isinstance(results[7], dict) else {},
+    }
 
 
 def build_training_dataset(data: dict) -> tuple:
@@ -156,7 +167,7 @@ def build_training_dataset(data: dict) -> tuple:
     for ticker, df in data["tickers_data"].items():
         logger.info(f"Processing {ticker}...")
 
-        # Calculate features
+        # Calculate features (all 89 including news/social/whale)
         features_df = feature_eng.calculate_features_v4(
             df=df,
             btc_df=btc_data,
@@ -166,6 +177,9 @@ def build_training_dataset(data: dict) -> tuple:
             onchain_data=ext.get("onchain"),
             sentiment_data=ext.get("sentiment"),
             defi_data=ext.get("defi"),
+            news_data=ext.get("news"),
+            social_data=ext.get("social"),
+            whale_data=ext.get("whale"),
         )
 
         if len(features_df) < 200:

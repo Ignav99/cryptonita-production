@@ -1,12 +1,88 @@
 {
-  "cv_auc": 0.7814375118734361,
-  "ensemble_auc": 1.0,
-  "total_samples": 1992,
-  "n_features": 80,
-  "positive_rate": 0.20833333333333334,
-  "backtest_roi": 2.553119274529192,
-  "backtest_win_rate": 73.33333333333333,
-  "backtest_trades": 30,
-  "regime": "Bull",
-  "timestamp": "2026-03-18T20:14:12.701970+00:00"
+  "auc_roc": 0.9896495123650786,
+  "accuracy": 0.919727698198837,
+  "precision": 0.9875032543608435,
+  "recall": 0.6312198369112997,
+  "f1": 0.7701522842639594,
+  "n_samples": 28204,
+  "n_features": 89,
+  "positive_rate": 0.2130548858317969,
+  "cv_mean_auc": 0.7653043979250119,
+  "cv_std_auc": 0.14404083072581075,
+  "cv_folds": [
+    {
+      "fold": 1,
+      "train_size": 27899,
+      "test_size": 60,
+      "score": 0.8351648351648351
+    },
+    {
+      "fold": 2,
+      "train_size": 27959,
+      "test_size": 60,
+      "score": 0.760233918128655
+    },
+    {
+      "fold": 3,
+      "train_size": 28019,
+      "test_size": 60,
+      "score": 0.7232142857142857
+    },
+    {
+      "fold": 4,
+      "train_size": 28079,
+      "test_size": 60,
+      "score": 0.9739583333333334
+    },
+    {
+      "fold": 5,
+      "train_size": 28139,
+      "test_size": 60,
+      "score": 0.5339506172839507
+    }
+  ],
+  "training_time_seconds": 65.87245106697083,
+  "training_mode": "quick",
+  "timestamp": "2026-03-20T12:29:37.466639+00:00",
+  "tickers_used": [
+    "SOLUSDT",
+    "AVAXUSDT",
+    "NEARUSDT",
+    "APTUSDT",
+    "SUIUSDT",
+    "SEIUSDT",
+    "ARBUSDT",
+    "OPUSDT",
+    "INJUSDT",
+    "UNIUSDT",
+    "AAVEUSDT",
+    "LDOUSDT",
+    "RUNEUSDT",
+    "CRVUSDT",
+    "GMXUSDT",
+    "DYDXUSDT",
+    "SANDUSDT",
+    "MANAUSDT",
+    "AXSUSDT",
+    "IMXUSDT",
+    "GALAUSDT",
+    "FETUSDT",
+    "WLDUSDT",
+    "RENDERUSDT",
+    "DOGEUSDT",
+    "SHIBUSDT",
+    "PEPEUSDT",
+    "FLOKIUSDT",
+    "BONKUSDT",
+    "DOTUSDT",
+    "ATOMUSDT",
+    "ADAUSDT",
+    "POLUSDT",
+    "LINKUSDT",
+    "ICPUSDT",
+    "FILUSDT",
+    "HBARUSDT",
+    "VETUSDT",
+    "ALGOUSDT"
+  ]
 }

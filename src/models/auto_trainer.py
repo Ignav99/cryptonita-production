@@ -100,6 +100,9 @@ class AutoTrainer:
                     onchain_data=external_data.get("onchain"),
                     sentiment_data=external_data.get("sentiment"),
                     defi_data=external_data.get("defi"),
+                    news_data=external_data.get("news"),
+                    social_data=external_data.get("social"),
+                    whale_data=external_data.get("whale"),
                 )
 
                 if len(features_df) < 200:
@@ -480,12 +483,15 @@ class AutoTrainer:
                     pass
 
     def _fetch_external_data_sync(self) -> Dict:
-        """Fetch all external data sources synchronously."""
+        """Fetch all external data sources synchronously (including news, social, whale)."""
         from src.data.macro_data import MacroDataFetcher
         from src.data.derivatives_fetcher import DerivativesFetcher
         from src.data.onchain_fetcher import OnChainFetcher
         from src.data.sentiment_fetcher import SentimentFetcher
         from src.data.defi_fetcher import DeFiFetcher
+        from src.data.news_fetcher import NewsFetcher
+        from src.data.social_fetcher import SocialFetcher
+        from src.data.whale_fetcher import WhaleFetcher
 
         async def _fetch():
             macro = MacroDataFetcher()
@@ -493,6 +499,9 @@ class AutoTrainer:
             onchain = OnChainFetcher()
             sentiment = SentimentFetcher()
             defi = DeFiFetcher()
+            news = NewsFetcher()
+            social = SocialFetcher()
+            whale = WhaleFetcher()
 
             results = await asyncio.gather(
                 macro.get_all_macro_data(),
@@ -500,6 +509,9 @@ class AutoTrainer:
                 onchain.get_all_onchain_data(),
                 sentiment.get_all_sentiment_data(),
                 defi.get_all_defi_data(),
+                news.get_all_news_data(),
+                social.get_all_social_data(),
+                whale.get_all_whale_data(),
                 return_exceptions=True,
             )
             return {
@@ -508,6 +520,9 @@ class AutoTrainer:
                 "onchain": results[2] if isinstance(results[2], dict) else {},
                 "sentiment": results[3] if isinstance(results[3], dict) else {},
                 "defi": results[4] if isinstance(results[4], dict) else {},
+                "news": results[5] if isinstance(results[5], dict) else {},
+                "social": results[6] if isinstance(results[6], dict) else {},
+                "whale": results[7] if isinstance(results[7], dict) else {},
             }
 
         try:
