@@ -98,6 +98,67 @@ class SignalPerformance(BaseModel):
     days_available: int
 
 
+class SignalDetail(BaseModel):
+    id: int
+    ticker: str
+    display_name: str
+    signal_type: str
+    probability: float
+    threshold: float
+    distance_to_threshold: float
+    tier: int
+    timestamp: datetime
+
+
+class CoinTrendPoint(BaseModel):
+    probability: float
+    signal_type: str
+    timestamp: datetime
+
+
+class CoinSummary(BaseModel):
+    ticker: str
+    display_name: str
+    latest_signal_type: str
+    latest_probability: float
+    threshold: float
+    tier: int
+    distance_to_threshold: float
+    probability_change: Optional[float] = None
+    trend_direction: Optional[str] = None
+    signal_count_7d: int = 0
+    buy_count_7d: int = 0
+    last_scan: Optional[datetime] = None
+
+
+class CoinTrend(BaseModel):
+    ticker: str
+    display_name: str
+    threshold: float
+    data_points: List[CoinTrendPoint]
+
+
+class SignalsSummaryStats(BaseModel):
+    total_coins_scanned: int
+    buy_signals_count: int
+    hold_signals_count: int
+    near_threshold_count: int
+    avg_probability: float
+    highest_probability_ticker: Optional[str] = None
+    highest_probability_value: Optional[float] = None
+    last_scan_time: Optional[datetime] = None
+
+
+class ThresholdProximity(BaseModel):
+    ticker: str
+    display_name: str
+    probability: float
+    threshold: float
+    distance_pct: float
+    tier: int
+    signal_type: str
+
+
 class SignalAnalysisSummary(BaseModel):
     total_signals: int
     hit_rate: float

@@ -108,6 +108,28 @@ export const dashboard = {
     const response = await apiClient.get('/dashboard/signal-analysis');
     return response.data;
   },
+
+  getSignalsSummary: async () => {
+    const response = await apiClient.get('/dashboard/signals/summary');
+    return response.data;
+  },
+
+  getCoinSummaries: async () => {
+    const response = await apiClient.get('/dashboard/signals/coins');
+    return response.data;
+  },
+
+  getSignalTrends: async (days = 14, tickers = null) => {
+    let url = `/dashboard/signals/trends?days=${days}`;
+    if (tickers) url += `&tickers=${tickers}`;
+    const response = await apiClient.get(url);
+    return response.data;
+  },
+
+  getThresholdProximity: async () => {
+    const response = await apiClient.get('/dashboard/signals/thresholds');
+    return response.data;
+  },
 };
 
 // Controls API

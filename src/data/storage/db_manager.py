@@ -250,7 +250,7 @@ class DatabaseManager:
         query = """
         SELECT * FROM signals
         WHERE probability >= :min_probability
-          AND timestamp >= NOW() - INTERVAL ':days days'
+          AND timestamp >= NOW() - :days * INTERVAL '1 day'
         ORDER BY probability DESC, timestamp DESC
         LIMIT :limit
         """
@@ -259,6 +259,40 @@ class DatabaseManager:
             'min_probability': min_probability,
             'days': days
         })
+
+    def get_all_latest_signals(self) -> pd.DataFrame:
+        """Get the latest signal per ticker (DISTINCT ON)"""
+        query = """
+        SELECT DISTINCT ON (ticker) id, ticker, signal_type, probability, timestamp
+        FROM signals
+        ORDER BY ticker, timestamp DESC
+        """
+        return self.execute_query(query)
+
+    def get_signal_history(self, days: int = 14) -> pd.DataFrame:
+        """Get all signals for the last N days for trend analysis"""
+        query = """
+        SELECT id, ticker, signal_type, probability, timestamp
+        FROM signals
+        WHERE timestamp >= NOW() - :days * INTERVAL '1 day'
+        ORDER BY timestamp ASC
+        """
+        return self.execute_query(query, {'days': days})
+
+    def get_signals_stats(self, days: int = 7) -> pd.DataFrame:
+        """Get signal counts per ticker for the last N days"""
+        query = """
+        SELECT
+            ticker,
+            COUNT(*) as total_count,
+            COUNT(*) FILTER (WHERE signal_type = 'BUY') as buy_count,
+            COUNT(*) FILTER (WHERE signal_type = 'HOLD') as hold_count
+        FROM signals
+        WHERE timestamp >= NOW() - :days * INTERVAL '1 day'
+        GROUP BY ticker
+        ORDER BY total_count DESC
+        """
+        return self.execute_query(query, {'days': days})
 
     # ============================================
     # TRADES

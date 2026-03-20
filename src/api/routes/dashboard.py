@@ -9,7 +9,8 @@ from config import settings
 from src.api.auth import get_current_user
 from src.api.schemas.dashboard import (
     DashboardStats, Position, Signal, Trade, BotStatus, PerformanceMetric,
-    SignalAnalysisSummary
+    SignalAnalysisSummary, SignalDetail, CoinSummary, CoinTrend, CoinTrendPoint,
+    SignalsSummaryStats, ThresholdProximity,
 )
 import pandas as pd
 from src.data.storage.db_manager import DatabaseManager
@@ -77,18 +78,217 @@ async def get_closed_positions(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/signals", response_model=List[Signal])
+@router.get("/signals/summary", response_model=SignalsSummaryStats)
+async def get_signals_summary(current_user: dict = Depends(get_current_user)):
+    """Get aggregate signal statistics"""
+    try:
+        risk_profiles = settings.COIN_RISK_PROFILES
+        default_profile = settings.DEFAULT_RISK_PROFILE
+        display_names = settings.TICKER_DISPLAY_NAMES
+
+        latest_df = db.get_all_latest_signals()
+        if len(latest_df) == 0:
+            return SignalsSummaryStats(
+                total_coins_scanned=0, buy_signals_count=0, hold_signals_count=0,
+                near_threshold_count=0, avg_probability=0.0,
+            )
+
+        buy_count = int((latest_df['signal_type'] == 'BUY').sum())
+        hold_count = int((latest_df['signal_type'] == 'HOLD').sum())
+
+        near_count = 0
+        for _, row in latest_df.iterrows():
+            profile = risk_profiles.get(row['ticker'], default_profile)
+            distance = abs(row['probability'] - profile['threshold'])
+            if distance <= 0.05:
+                near_count += 1
+
+        avg_prob = float(latest_df['probability'].mean())
+        top_row = latest_df.loc[latest_df['probability'].idxmax()]
+        last_scan = latest_df['timestamp'].max()
+
+        return SignalsSummaryStats(
+            total_coins_scanned=len(latest_df),
+            buy_signals_count=buy_count,
+            hold_signals_count=hold_count,
+            near_threshold_count=near_count,
+            avg_probability=round(avg_prob, 4),
+            highest_probability_ticker=display_names.get(top_row['ticker'], top_row['ticker']),
+            highest_probability_value=round(float(top_row['probability']), 4),
+            last_scan_time=last_scan,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/signals/coins", response_model=List[CoinSummary])
+async def get_coin_summaries(current_user: dict = Depends(get_current_user)):
+    """Get per-coin signal summary with trend info"""
+    try:
+        risk_profiles = settings.COIN_RISK_PROFILES
+        default_profile = settings.DEFAULT_RISK_PROFILE
+        display_names = settings.TICKER_DISPLAY_NAMES
+
+        latest_df = db.get_all_latest_signals()
+        stats_df = db.get_signals_stats(days=7)
+        history_df = db.get_signal_history(days=14)
+
+        stats_map = {}
+        if len(stats_df) > 0:
+            stats_map = {row['ticker']: row for _, row in stats_df.iterrows()}
+
+        results = []
+        for _, row in latest_df.iterrows():
+            ticker = row['ticker']
+            profile = risk_profiles.get(ticker, default_profile)
+            threshold = profile['threshold']
+            prob = float(row['probability'])
+            distance = round(prob - threshold, 4)
+
+            stats = stats_map.get(ticker, {})
+            signal_count = int(stats.get('total_count', 0))
+            buy_count = int(stats.get('buy_count', 0))
+
+            # Trend: compare latest prob to avg of last 7 days
+            ticker_history = history_df[history_df['ticker'] == ticker] if len(history_df) > 0 else pd.DataFrame()
+            prob_change = None
+            trend_dir = None
+            if len(ticker_history) >= 2:
+                prev_avg = float(ticker_history['probability'].iloc[:-1].mean())
+                prob_change = round(prob - prev_avg, 4)
+                trend_dir = 'up' if prob_change > 0.005 else ('down' if prob_change < -0.005 else 'flat')
+
+            results.append(CoinSummary(
+                ticker=ticker,
+                display_name=display_names.get(ticker, ticker.replace('USDT', '')),
+                latest_signal_type=row['signal_type'],
+                latest_probability=round(prob, 4),
+                threshold=threshold,
+                tier=profile['tier'],
+                distance_to_threshold=distance,
+                probability_change=prob_change,
+                trend_direction=trend_dir,
+                signal_count_7d=signal_count,
+                buy_count_7d=buy_count,
+                last_scan=row['timestamp'],
+            ))
+
+        results.sort(key=lambda x: x.latest_probability, reverse=True)
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/signals/trends", response_model=List[CoinTrend])
+async def get_signal_trends(
+    days: int = 14,
+    tickers: str = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Get probability time series per coin for trend charts"""
+    try:
+        risk_profiles = settings.COIN_RISK_PROFILES
+        default_profile = settings.DEFAULT_RISK_PROFILE
+        display_names = settings.TICKER_DISPLAY_NAMES
+
+        history_df = db.get_signal_history(days=days)
+        if len(history_df) == 0:
+            return []
+
+        if tickers:
+            ticker_list = [t.strip() for t in tickers.split(',')]
+            history_df = history_df[history_df['ticker'].isin(ticker_list)]
+
+        results = []
+        for ticker, group in history_df.groupby('ticker'):
+            profile = risk_profiles.get(ticker, default_profile)
+            points = [
+                CoinTrendPoint(
+                    probability=round(float(r['probability']), 4),
+                    signal_type=r['signal_type'],
+                    timestamp=r['timestamp'],
+                )
+                for _, r in group.iterrows()
+            ]
+            results.append(CoinTrend(
+                ticker=ticker,
+                display_name=display_names.get(ticker, ticker.replace('USDT', '')),
+                threshold=profile['threshold'],
+                data_points=points,
+            ))
+
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/signals/thresholds", response_model=List[ThresholdProximity])
+async def get_threshold_proximity(current_user: dict = Depends(get_current_user)):
+    """Get all coins ranked by proximity to their threshold"""
+    try:
+        risk_profiles = settings.COIN_RISK_PROFILES
+        default_profile = settings.DEFAULT_RISK_PROFILE
+        display_names = settings.TICKER_DISPLAY_NAMES
+
+        latest_df = db.get_all_latest_signals()
+        if len(latest_df) == 0:
+            return []
+
+        results = []
+        for _, row in latest_df.iterrows():
+            ticker = row['ticker']
+            profile = risk_profiles.get(ticker, default_profile)
+            prob = float(row['probability'])
+            threshold = profile['threshold']
+            distance_pct = round((prob - threshold) * 100, 2)
+
+            results.append(ThresholdProximity(
+                ticker=ticker,
+                display_name=display_names.get(ticker, ticker.replace('USDT', '')),
+                probability=round(prob, 4),
+                threshold=threshold,
+                distance_pct=distance_pct,
+                tier=profile['tier'],
+                signal_type=row['signal_type'],
+            ))
+
+        results.sort(key=lambda x: abs(x.distance_pct))
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/signals", response_model=List[SignalDetail])
 async def get_recent_signals(
     limit: int = 50,
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    Get recent trading signals
-    """
+    """Get recent trading signals enriched with display_name, threshold, tier"""
     try:
+        risk_profiles = settings.COIN_RISK_PROFILES
+        default_profile = settings.DEFAULT_RISK_PROFILE
+        display_names = settings.TICKER_DISPLAY_NAMES
+
         signals_df = db.get_recent_signals(limit=limit)
-        signals = signals_df.to_dict('records')
-        return [Signal(**signal) for signal in signals]
+        results = []
+        for _, row in signals_df.iterrows():
+            ticker = row['ticker']
+            profile = risk_profiles.get(ticker, default_profile)
+            prob = float(row['probability'])
+            threshold = profile['threshold']
+
+            results.append(SignalDetail(
+                id=int(row['id']),
+                ticker=ticker,
+                display_name=display_names.get(ticker, ticker.replace('USDT', '')),
+                signal_type=row['signal_type'],
+                probability=round(prob, 4),
+                threshold=threshold,
+                distance_to_threshold=round(prob - threshold, 4),
+                tier=profile['tier'],
+                timestamp=row['timestamp'],
+            ))
+        return results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

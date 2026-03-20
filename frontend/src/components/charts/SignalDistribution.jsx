@@ -25,7 +25,7 @@ export default function SignalDistribution({ data }) {
   }
 
   const counts = data.reduce((acc, s) => {
-    const action = s.action || 'HOLD';
+    const action = s.signal_type || s.latest_signal_type || s.action || 'HOLD';
     acc[action] = (acc[action] || 0) + 1;
     return acc;
   }, {});
