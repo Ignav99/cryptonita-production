@@ -1,6 +1,6 @@
 """
 Machine Learning Models
 """
-from .predictor import TradingPredictor
+from .predictor_v4 import TradingPredictorV4
 
-__all__ = ["TradingPredictor"]
+__all__ = ["TradingPredictorV4"]

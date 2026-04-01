@@ -1,5 +1,5 @@
 """
-CRYPTONITA TRADING BOT V3
+CRYPTONITA TRADING BOT V4
 ==========================
 Main trading bot implementation with:
 - Market scanning every 12 hours
@@ -9,10 +9,8 @@ Main trading bot implementation with:
 - Database logging
 """
 
-import json
 import asyncio
 import time
-from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from loguru import logger
@@ -31,34 +29,23 @@ class TradingBot:
     Main trading bot for automated cryptocurrency trading
     """
 
-    def __init__(self, config_path: str = "bot_config.json"):
-        """
-        Initialize trading bot
-
-        Args:
-            config_path: Path to bot configuration file
-        """
+    def __init__(self):
+        """Initialize trading bot"""
         logger.info("=" * 60)
-        logger.info("🤖 INITIALIZING CRYPTONITA TRADING BOT V3")
+        logger.info("🤖 INITIALIZING CRYPTONITA TRADING BOT V4")
         logger.info("=" * 60)
 
-        # Load configuration
-        self.config = self._load_config(config_path)
-        self.production_config = self._load_production_config()
+        # Load configuration from defaults
+        self.config = self._default_config()
 
         # Initialize services
         self.binance = BinanceService()  # For trading (testnet)
         self.binance_data = BinanceDataService()  # For historical data (production, read-only)
 
-        # Select predictor based on V4 flag
-        if getattr(settings, 'USE_V4_MODEL', False):
-            from src.models.predictor_v4 import TradingPredictorV4
-            self.predictor = TradingPredictorV4()
-            logger.info("Using V4 Ensemble Predictor")
-        else:
-            from src.models.predictor import TradingPredictor
-            self.predictor = TradingPredictor()
-            logger.info("Using V3 XGBoost Predictor")
+        # V4 Ensemble Predictor
+        from src.models.predictor_v4 import TradingPredictorV4
+        self.predictor = TradingPredictorV4()
+        logger.info("Using V4 Ensemble Predictor")
 
         self.db = DatabaseManager(settings.get_database_url())
         self.macro_fetcher = MacroDataFetcher()
@@ -80,41 +67,6 @@ class TradingBot:
 
         logger.success("✅ Trading Bot initialized successfully")
         self._log_configuration()
-
-    def _load_config(self, config_path: str) -> dict:
-        """Load bot configuration"""
-        try:
-            # Try relative path first
-            config_file = Path(config_path)
-
-            # If not found, try from project root
-            if not config_file.exists():
-                project_root = Path(__file__).parent.parent.parent
-                config_file = project_root / config_path
-
-            if config_file.exists():
-                with open(config_file, 'r') as f:
-                    config = json.load(f)
-                logger.info(f"📄 Bot config loaded from {config_file}")
-                return config
-            else:
-                logger.warning(f"⚠️ Config file not found: {config_path}, using defaults")
-                return self._default_config()
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to load config: {e}, using defaults")
-            return self._default_config()
-
-    def _load_production_config(self) -> dict:
-        """Load production system configuration"""
-        try:
-            config_path = Path(settings.MASTER_CONFIG_FILE)
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-            logger.info("📄 Production config loaded")
-            return config
-        except Exception as e:
-            logger.error(f"❌ Failed to load production config: {e}")
-            return {}
 
     def _default_config(self) -> dict:
         """Return default configuration"""
@@ -418,18 +370,17 @@ class TradingBot:
             logger.warning(f"⚠️ Trade blocked: {reason}")
             return
 
-        # 4. Calculate position size (V4 uses ticker for tier-based sizing)
-        size_kwargs = dict(
+        # 4. Calculate position size (V4 uses ticker + confidence for sizing)
+        position_info = self.predictor.calculate_position_size(
             current_price=current_price,
             portfolio_value=portfolio_value,
             probability=probability,
+            ticker=ticker,
         )
-        if hasattr(self.predictor, '_get_ticker_profile'):
-            size_kwargs["ticker"] = ticker
-        position_info = self.predictor.calculate_position_size(**size_kwargs)
 
         quantity = position_info['quantity']
         usd_value = position_info['usd_value']
+        confidence = position_info.get('confidence', 'exploratory')
 
         # 4.5 Check if we can afford this trade
         can_afford, afford_reason = self.db.can_afford_trade(usd_value)
@@ -473,7 +424,8 @@ class TradingBot:
             entry_price=executed_price,
             ticker=ticker,
             features=signal.get('features', {}),
-            market_conditions=macro_data_dict
+            market_conditions=macro_data_dict,
+            confidence=confidence,
         )
 
         # 8. Place OCO order for TP1 (first take profit level)
@@ -625,8 +577,8 @@ class TradingBot:
                     macro_data = await self.macro_fetcher.get_all_macro_data()
 
                     # Calculate current features
-                    from src.data.features import FeatureEngineer
-                    feature_engineer = FeatureEngineer()
+                    from src.data.features_v4 import FeatureEngineerV4
+                    feature_engineer = FeatureEngineerV4()
                     df_with_features = feature_engineer.calculate_features(df, btc_data, macro_data)
                     feature_vector = feature_engineer.get_feature_vector(df_with_features)
 

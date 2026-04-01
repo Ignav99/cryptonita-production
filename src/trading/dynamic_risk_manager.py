@@ -66,7 +66,8 @@ class DynamicRiskManager:
         entry_price: float,
         ticker: str,
         features: Dict[str, float],
-        market_conditions: Optional[Dict] = None
+        market_conditions: Optional[Dict] = None,
+        confidence: str = "high",
     ) -> Dict[str, float]:
         """
         Calcula TP/SL dinámicos con tier-awareness.
@@ -90,30 +91,35 @@ class DynamicRiskManager:
         momentum_multiplier = self._calculate_momentum_multiplier(momentum_3d, momentum_strength)
         market_multiplier = self._calculate_market_multiplier(market_conditions)
 
-        # Calcular Stop Loss dinámico (tier-adjusted)
-        dynamic_sl_pct = self.base_sl_pct * volatility_multiplier * tier_adj['sl_mult']
-        dynamic_sl_pct = max(0.03, min(0.12, dynamic_sl_pct))
+        # Confidence-level multipliers (tighter TP/SL for lower confidence)
+        conf_config = settings.CONFIDENCE_LEVELS.get(confidence, settings.CONFIDENCE_LEVELS["exploratory"])
+        conf_tp_mult = conf_config.get("tp_mult", 1.0)
+        conf_sl_mult = conf_config.get("sl_mult", 1.0)
+
+        # Calcular Stop Loss dinámico (tier + confidence adjusted)
+        dynamic_sl_pct = self.base_sl_pct * volatility_multiplier * tier_adj['sl_mult'] * conf_sl_mult
+        dynamic_sl_pct = max(0.02, min(0.12, dynamic_sl_pct))
 
         stop_loss = entry_price * (1 - dynamic_sl_pct)
 
-        # Calcular Take Profits dinámicos (tier-adjusted)
-        tp_multiplier = volatility_multiplier * momentum_multiplier * market_multiplier * tier_adj['tp_mult']
+        # Calcular Take Profits dinámicos (tier + confidence adjusted)
+        tp_multiplier = volatility_multiplier * momentum_multiplier * market_multiplier * tier_adj['tp_mult'] * conf_tp_mult
 
         tp1_pct = self.tp_levels[0]['pct'] * tp_multiplier
         tp2_pct = self.tp_levels[1]['pct'] * tp_multiplier
         tp3_pct = self.tp_levels[2]['pct'] * tp_multiplier
 
-        # Límites razonables (widened for tier 1, tightened for tier 4)
-        tp1_pct = max(0.06, min(0.25, tp1_pct))
-        tp2_pct = max(0.12, min(0.45, tp2_pct))
-        tp3_pct = max(0.25, min(0.80, tp3_pct))
+        # Límites razonables (adjusted for confidence level)
+        tp1_pct = max(0.03, min(0.25, tp1_pct))
+        tp2_pct = max(0.06, min(0.45, tp2_pct))
+        tp3_pct = max(0.12, min(0.80, tp3_pct))
 
         tp1 = entry_price * (1 + tp1_pct)
         tp2 = entry_price * (1 + tp2_pct)
         tp3 = entry_price * (1 + tp3_pct)
 
         logger.info(
-            f"[T{tier}] {ticker} | SL: -{dynamic_sl_pct*100:.1f}% | "
+            f"[T{tier}/{confidence}] {ticker} | SL: -{dynamic_sl_pct*100:.1f}% | "
             f"TP1: +{tp1_pct*100:.1f}% | TP2: +{tp2_pct*100:.1f}% | TP3: +{tp3_pct*100:.1f}% | "
             f"Vol: {volatility_multiplier:.2f}x | Mom: {momentum_multiplier:.2f}x"
         )

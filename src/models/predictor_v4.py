@@ -158,8 +158,27 @@ class TradingPredictorV4:
         return self.risk_profiles.get(ticker, self.default_profile)
 
     def _get_ticker_threshold(self, ticker: str) -> float:
-        """Get dynamic threshold for a specific ticker"""
+        """Get dynamic threshold for a specific ticker (high confidence level)"""
         return self._get_ticker_profile(ticker)["threshold"]
+
+    def _classify_confidence(self, probability: float, profile: Dict) -> str:
+        """
+        Classify signal into confidence level based on probability and tier thresholds.
+
+        Returns: "high", "medium", "exploratory", or "none"
+        """
+        if probability >= profile["threshold"]:
+            return "high"
+        elif probability >= profile.get("threshold_medium", profile["threshold"]):
+            return "medium"
+        elif probability >= profile.get("threshold_low", profile["threshold"]):
+            return "exploratory"
+        return "none"
+
+    def get_signal_confidence(self, ticker: str, probability: float) -> str:
+        """Public method to get confidence level for a ticker/probability."""
+        profile = self._get_ticker_profile(ticker)
+        return self._classify_confidence(probability, profile)
 
     async def _fetch_external_data(self) -> Dict[str, Dict]:
         """Fetch all external data sources concurrently"""
@@ -265,10 +284,10 @@ class TradingPredictorV4:
             X = feature_vector.reshape(1, -1)
             probability = float(self.ensemble.predict_proba(X)[0])
 
-            # Use dynamic threshold per ticker
+            # Use dynamic threshold per ticker with 3 confidence levels
             profile = self._get_ticker_profile(ticker)
-            ticker_threshold = profile["threshold"]
-            prediction = 1 if probability >= ticker_threshold else 0
+            confidence = self._classify_confidence(probability, profile)
+            prediction = 1 if confidence != "none" else 0
 
             # Features dict for logging
             log_names = self.feature_engineer.selected_features or self.feature_engineer.required_features_v4
@@ -281,7 +300,7 @@ class TradingPredictorV4:
             regime = self._cached_regime.get("regime_name", "?") if self._cached_regime else "?"
             logger.info(
                 f"[V4] {ticker}: {signal_type} (p={probability:.4f}, "
-                f"threshold={ticker_threshold}, tier={profile['tier']}, regime={regime})"
+                f"confidence={confidence}, tier={profile['tier']}, regime={regime})"
             )
 
             return prediction, probability, features_dict
@@ -342,9 +361,20 @@ class TradingPredictorV4:
         top_n: int = 10,
         min_probability: Optional[float] = None,
     ) -> pd.DataFrame:
-        """Get top N signals by probability"""
-        threshold = min_probability if min_probability is not None else self.threshold
-        signals = predictions_df[predictions_df["probability"] >= threshold].copy()
+        """Get top N signals by probability, filtered by lowest confidence threshold."""
+        if min_probability is not None:
+            signals = predictions_df[predictions_df["probability"] >= min_probability].copy()
+        else:
+            # Filter: only signals that reach at least exploratory level for their tier
+            mask = predictions_df.apply(
+                lambda row: self._classify_confidence(
+                    row["probability"],
+                    self._get_ticker_profile(row["ticker"])
+                ) != "none",
+                axis=1,
+            )
+            signals = predictions_df[mask].copy()
+
         signals = signals.sort_values("probability", ascending=False)
         return signals.head(top_n)
 
@@ -355,17 +385,28 @@ class TradingPredictorV4:
         current_positions: int,
         daily_loss: float,
     ) -> Tuple[bool, str]:
-        """Same interface as TradingPredictor.should_trade"""
+        """
+        Check if we should trade, using 3-level confidence system.
+        Returns (should_trade, reason).
+        """
         profile = self._get_ticker_profile(ticker)
-        ticker_threshold = profile["threshold"]
-        if probability < ticker_threshold:
+        confidence = self._classify_confidence(probability, profile)
+
+        if confidence == "none":
+            lowest = profile.get("threshold_low", profile["threshold"])
             return False, (
-                f"Probability {probability:.4f} below threshold "
-                f"{ticker_threshold} (tier {profile['tier']})"
+                f"Probability {probability:.4f} below minimum threshold "
+                f"{lowest} (tier {profile['tier']})"
             )
 
+        # Check position limits per confidence level
+        conf_config = settings.CONFIDENCE_LEVELS.get(confidence, {})
+        max_pos = conf_config.get("max_positions", settings.MAX_POSITIONS)
+        if current_positions >= max_pos:
+            return False, f"Max positions for {confidence} confidence reached ({max_pos})"
+
         if current_positions >= settings.MAX_POSITIONS:
-            return False, f"Max positions reached ({settings.MAX_POSITIONS})"
+            return False, f"Max total positions reached ({settings.MAX_POSITIONS})"
 
         if daily_loss >= settings.MAX_DAILY_LOSS_USD:
             return False, f"Daily loss limit reached (${daily_loss:.2f})"
@@ -374,13 +415,15 @@ class TradingPredictorV4:
             return False, "Manual approval required"
 
         # V4: Check regime — block new trades in Bear regime
+        # But allow high-confidence signals through even in mild bear
         if self._cached_regime:
             regime = self._cached_regime.get("regime_name", "Sideways")
             bear_prob = self._cached_regime.get("regime_bear_prob", 0)
             if regime == "Bear" and bear_prob > 0.7:
-                return False, f"Bear regime detected (prob={bear_prob:.2f})"
+                if confidence != "high":
+                    return False, f"Bear regime — only high-confidence trades allowed (prob={bear_prob:.2f})"
 
-        return True, "All checks passed"
+        return True, f"All checks passed (confidence={confidence})"
 
     def calculate_position_size(
         self,
@@ -390,23 +433,28 @@ class TradingPredictorV4:
         ticker: str = "",
     ) -> Dict[str, float]:
         """
-        Calculate position size using Kelly Criterion with tier-based adjustments.
+        Calculate position size using Kelly Criterion with tier + confidence adjustments.
         """
         profile = self._get_ticker_profile(ticker)
+        confidence = self._classify_confidence(probability, profile)
+        conf_config = settings.CONFIDENCE_LEVELS.get(confidence, settings.CONFIDENCE_LEVELS["exploratory"])
+        position_mult = conf_config.get("position_mult", 0.25)
+
         result = self.position_sizer.calculate_position_size(
             current_price=current_price,
             portfolio_value=portfolio_value,
             probability=probability,
             regime_data=self._cached_regime,
             max_position_usd=settings.MAX_POSITION_SIZE_USD,
-            kelly_mult=profile["kelly_mult"],
-            max_position_pct_override=profile["max_position_pct"],
+            kelly_mult=profile["kelly_mult"] * position_mult,
+            max_position_pct_override=profile["max_position_pct"] * position_mult,
         )
 
         return {
             "quantity": result["quantity"],
             "usd_value": result["usd_value"],
             "position_pct": result["position_pct"],
+            "confidence": confidence,
         }
 
     async def get_macro_data_async(self) -> Dict:

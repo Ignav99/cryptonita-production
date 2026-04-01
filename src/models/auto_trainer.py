@@ -259,35 +259,59 @@ class AutoTrainer:
                 y_test = labeled_df["target"].iloc[test_start:].values
 
                 probas = ensemble.predict_proba(X_test)
-                predictions = (probas >= settings.PREDICTION_THRESHOLD).astype(int)
+
+                # Use per-tier confidence thresholds
+                profile = settings.COIN_RISK_PROFILES.get(ticker, settings.DEFAULT_RISK_PROFILE)
+                lowest_threshold = profile.get(
+                    "threshold_low",
+                    profile.get("threshold", settings.PREDICTION_THRESHOLD),
+                )
 
                 closes = labeled_df["close"].iloc[test_start:].values
                 tp_prices = labeled_df["tp_price"].iloc[test_start:].values
                 sl_prices = labeled_df["sl_price"].iloc[test_start:].values
 
-                for i in range(len(predictions)):
-                    if predictions[i] == 1:
-                        entry = closes[i]
-                        tp = tp_prices[i]
-                        sl = sl_prices[i]
+                for i in range(len(probas)):
+                    prob = float(probas[i])
+                    if prob < lowest_threshold:
+                        continue
 
-                        if np.isnan(tp) or np.isnan(sl):
-                            continue
+                    # Classify confidence level
+                    if prob >= profile["threshold"]:
+                        confidence = "high"
+                    elif prob >= profile.get("threshold_medium", profile["threshold"]):
+                        confidence = "medium"
+                    else:
+                        confidence = "exploratory"
 
-                        # Simplified: use label as outcome
-                        actual = y_test[i] if i < len(y_test) else 0
-                        if actual == 1:
-                            pnl_pct = (tp - entry) / entry
-                        else:
-                            pnl_pct = (sl - entry) / entry
+                    conf_config = settings.CONFIDENCE_LEVELS.get(confidence, settings.CONFIDENCE_LEVELS["exploratory"])
+                    position_mult = conf_config.get("position_mult", 0.25)
 
-                        trades.append({
-                            "ticker": ticker,
-                            "entry": entry,
-                            "pnl_pct": pnl_pct,
-                            "win": actual == 1,
-                            "probability": float(probas[i]),
-                        })
+                    entry = closes[i]
+                    tp = tp_prices[i]
+                    sl = sl_prices[i]
+
+                    if np.isnan(tp) or np.isnan(sl):
+                        continue
+
+                    # Simplified: use label as outcome
+                    actual = y_test[i] if i < len(y_test) else 0
+                    if actual == 1:
+                        pnl_pct = (tp - entry) / entry
+                    else:
+                        pnl_pct = (sl - entry) / entry
+
+                    # Scale PnL by position multiplier (reflects real sizing)
+                    pnl_pct *= position_mult
+
+                    trades.append({
+                        "ticker": ticker,
+                        "entry": entry,
+                        "pnl_pct": pnl_pct,
+                        "win": actual == 1,
+                        "probability": prob,
+                        "confidence": confidence,
+                    })
 
             except Exception as e:
                 logger.warning(f"Backtest failed for {ticker}: {e}")

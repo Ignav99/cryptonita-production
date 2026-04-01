@@ -1,49 +1,49 @@
 {
-  "auc_roc": 0.9896495123650786,
-  "accuracy": 0.919727698198837,
-  "precision": 0.9875032543608435,
-  "recall": 0.6312198369112997,
-  "f1": 0.7701522842639594,
-  "n_samples": 28204,
+  "auc_roc": 0.9922646860323098,
+  "accuracy": 0.9281685644354581,
+  "precision": 0.987542745481192,
+  "recall": 0.671929532989862,
+  "f1": 0.7997230738799328,
+  "n_samples": 28191,
   "n_features": 89,
-  "positive_rate": 0.2130548858317969,
-  "cv_mean_auc": 0.7653043979250119,
-  "cv_std_auc": 0.14404083072581075,
+  "positive_rate": 0.2134369124898017,
+  "cv_mean_auc": 0.672092668050694,
+  "cv_std_auc": 0.1877533572832662,
   "cv_folds": [
     {
       "fold": 1,
-      "train_size": 27899,
+      "train_size": 27886,
       "test_size": 60,
-      "score": 0.8351648351648351
+      "score": 0.777511961722488
     },
     {
       "fold": 2,
-      "train_size": 27959,
+      "train_size": 27946,
       "test_size": 60,
-      "score": 0.760233918128655
+      "score": 0.5172413793103448
     },
     {
       "fold": 3,
-      "train_size": 28019,
+      "train_size": 28006,
       "test_size": 60,
-      "score": 0.7232142857142857
+      "score": 0.6785714285714286
     },
     {
       "fold": 4,
-      "train_size": 28079,
+      "train_size": 28066,
       "test_size": 60,
-      "score": 0.9739583333333334
+      "score": 0.9583333333333334
     },
     {
       "fold": 5,
-      "train_size": 28139,
+      "train_size": 28126,
       "test_size": 60,
-      "score": 0.5339506172839507
+      "score": 0.42880523731587566
     }
   ],
-  "training_time_seconds": 65.87245106697083,
+  "training_time_seconds": 81.97790098190308,
   "training_mode": "quick",
-  "timestamp": "2026-03-20T12:29:37.466639+00:00",
+  "timestamp": "2026-04-01T23:26:27.320407+00:00",
   "tickers_used": [
     "SOLUSDT",
     "AVAXUSDT",
