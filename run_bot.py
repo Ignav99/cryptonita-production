@@ -69,7 +69,7 @@ async def main():
 
     try:
         # Create bot instance
-        bot = TradingBot(config_path="bot_config.json")
+        bot = TradingBot()
 
         # Start bot
         await bot.start()
