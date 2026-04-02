@@ -47,6 +47,8 @@ def migrate_positions_table():
                 ("trailing_stop_active", "BOOLEAN DEFAULT FALSE"),
                 ("oco_order_id", "VARCHAR(50)"),
                 ("trade_id", "INTEGER"),
+                ("entry_time", "TIMESTAMPTZ DEFAULT NOW()"),
+                ("last_update", "TIMESTAMPTZ DEFAULT NOW()"),
             ]
 
             migrations = []
