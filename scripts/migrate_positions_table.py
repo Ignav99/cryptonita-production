@@ -25,48 +25,42 @@ def migrate_positions_table():
 
         with db.engine.connect() as conn:
             # Check if columns exist and add them if missing
-            migrations = [
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                                 WHERE table_name='positions' AND column_name='total_value') THEN
-                        ALTER TABLE positions ADD COLUMN total_value NUMERIC;
-                        RAISE NOTICE 'Added total_value column';
-                    END IF;
-                END $$;
-                """,
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                                 WHERE table_name='positions' AND column_name='current_price') THEN
-                        ALTER TABLE positions ADD COLUMN current_price NUMERIC;
-                        RAISE NOTICE 'Added current_price column';
-                    END IF;
-                END $$;
-                """,
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                                 WHERE table_name='positions' AND column_name='pnl') THEN
-                        ALTER TABLE positions ADD COLUMN pnl NUMERIC;
-                        RAISE NOTICE 'Added pnl column';
-                    END IF;
-                END $$;
-                """,
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                                 WHERE table_name='positions' AND column_name='pnl_percentage') THEN
-                        ALTER TABLE positions ADD COLUMN pnl_percentage NUMERIC;
-                        RAISE NOTICE 'Added pnl_percentage column';
-                    END IF;
-                END $$;
-                """
+            # All columns that might be missing from the positions table
+            columns_to_add = [
+                ("total_value", "NUMERIC"),
+                ("current_price", "NUMERIC"),
+                ("pnl", "NUMERIC"),
+                ("pnl_percentage", "NUMERIC"),
+                ("remaining_quantity", "NUMERIC"),
+                ("stop_loss", "NUMERIC"),
+                ("tp1", "NUMERIC"),
+                ("tp1_hit", "BOOLEAN DEFAULT FALSE"),
+                ("tp1_size", "NUMERIC"),
+                ("tp2", "NUMERIC"),
+                ("tp2_hit", "BOOLEAN DEFAULT FALSE"),
+                ("tp2_size", "NUMERIC"),
+                ("tp3", "NUMERIC"),
+                ("tp3_hit", "BOOLEAN DEFAULT FALSE"),
+                ("tp3_size", "NUMERIC"),
+                ("atr_pct", "NUMERIC"),
+                ("trailing_stop_enabled", "BOOLEAN DEFAULT FALSE"),
+                ("trailing_stop_active", "BOOLEAN DEFAULT FALSE"),
+                ("oco_order_id", "VARCHAR(50)"),
+                ("trade_id", "INTEGER"),
             ]
+
+            migrations = []
+            for col_name, col_type in columns_to_add:
+                migrations.append(f"""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                                 WHERE table_name='positions' AND column_name='{col_name}') THEN
+                        ALTER TABLE positions ADD COLUMN {col_name} {col_type};
+                        RAISE NOTICE 'Added {col_name} column';
+                    END IF;
+                END $$;
+                """)
 
             for migration_sql in migrations:
                 conn.execute(text(migration_sql))

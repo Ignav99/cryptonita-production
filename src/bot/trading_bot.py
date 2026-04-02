@@ -459,15 +459,15 @@ class TradingBot:
 
         # 9. Log trade to database
         # Get signal_id from the most recent signal for this ticker
-        recent_signals = self.db.get_recent_signals(limit=100)
+        recent_signals = self.db.get_recent_signals(limit=100, min_probability=0.0)
         signal_id = None
         for _, sig in recent_signals.iterrows():
             if sig['ticker'] == ticker:
-                signal_id = sig['id']
+                signal_id = int(sig['id'])
                 break
 
         trade_id = self.db.save_trade(
-            signal_id=signal_id or 0,
+            signal_id=signal_id,
             ticker=ticker,
             action='BUY',
             quantity=executed_qty,
@@ -733,7 +733,7 @@ class TradingBot:
 
                 # Log to database
                 self.db.save_trade(
-                    signal_id=0,
+                    signal_id=None,
                     ticker=ticker,
                     action='SELL',
                     quantity=executed_qty,

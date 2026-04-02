@@ -306,7 +306,7 @@ class DatabaseManager:
 
     def save_trade(
         self,
-        signal_id: int,
+        signal_id: Optional[int],
         ticker: str,
         action: str,
         quantity: float,
