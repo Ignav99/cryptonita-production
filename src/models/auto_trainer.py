@@ -67,13 +67,16 @@ class AutoTrainer:
         eth_data = data_service.get_historical_klines("ETHUSDT", "1d", lookback_days)
 
         tickers_data = {}
-        for ticker in tickers:
+        for i, ticker in enumerate(tickers):
             try:
                 df = data_service.get_historical_klines(ticker, "1d", lookback_days)
                 if len(df) >= 200:
                     tickers_data[ticker] = df
             except Exception as e:
                 logger.warning(f"Failed to fetch {ticker}: {e}")
+            # Rate limit: pause every 5 tickers (730d klines = heavy weight)
+            if (i + 1) % 5 == 0:
+                time.sleep(10)
 
         logger.info(f"Fetched {len(tickers_data)} tickers")
 
@@ -232,9 +235,11 @@ class AutoTrainer:
         test_tickers = settings.TICKERS[:15]
         trades = []
 
-        for ticker in test_tickers:
+        for i, ticker in enumerate(test_tickers):
             try:
                 df = data_service.get_historical_klines(ticker, "1d", 365)
+                if (i + 1) % 5 == 0:
+                    time.sleep(10)  # Rate limit
                 if len(df) < 200:
                     continue
 

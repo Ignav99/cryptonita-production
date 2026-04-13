@@ -265,7 +265,7 @@ class Settings(BaseSettings):
     KELLY_FRACTION: float = Field(default=0.25, env="KELLY_FRACTION")
 
     # Auto-Training Configuration
-    AUTO_TRAIN_ENABLED: bool = Field(default=False, env="AUTO_TRAIN_ENABLED")  # Disabled: OOM on Render 512MB
+    AUTO_TRAIN_ENABLED: bool = Field(default=True, env="AUTO_TRAIN_ENABLED")  # Enabled: 2GB Render Standard
     AUTO_TRAIN_INTERVAL_DAYS: int = Field(default=7, env="AUTO_TRAIN_INTERVAL_DAYS")
     AUTO_TRAIN_MODE: str = Field(default="quick", env="AUTO_TRAIN_MODE")
     AUTO_TRAIN_MIN_SHARPE: float = Field(default=0.5, env="AUTO_TRAIN_MIN_SHARPE")
