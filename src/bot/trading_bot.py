@@ -65,6 +65,9 @@ class TradingBot:
         self.position_monitoring_minutes = self.config['trading']['position_monitoring_minutes']
         self.auto_trading = self.config['trading']['auto_trading_enabled']
 
+        # Load existing positions from DB (survive restarts)
+        self._load_positions_from_db()
+
         logger.success("✅ Trading Bot initialized successfully")
         self._log_configuration()
 
@@ -82,6 +85,81 @@ class TradingBot:
                 "max_daily_loss_usd": 200
             }
         }
+
+    def _load_positions_from_db(self):
+        """Load existing positions from database so bot survives restarts."""
+        try:
+            positions_df = self.db.get_positions()
+            if len(positions_df) == 0:
+                logger.info("No existing positions in DB")
+                return
+
+            for _, pos in positions_df.iterrows():
+                ticker = pos['ticker']
+                entry_price = float(pos['avg_buy_price'])
+                self.positions[ticker] = {
+                    'quantity': float(pos['quantity']),
+                    'remaining_quantity': float(pos.get('remaining_quantity', pos['quantity'])) if pd.notna(pos.get('remaining_quantity')) else float(pos['quantity']),
+                    'entry_price': entry_price,
+                    'current_price': float(pos['current_price']) if pd.notna(pos.get('current_price')) else entry_price,
+                    'stop_loss': float(pos['stop_loss']) if pd.notna(pos.get('stop_loss')) else entry_price * (1 - settings.STOP_LOSS_PCT),
+                    'tp1': float(pos['tp1']) if pd.notna(pos.get('tp1')) else None,
+                    'tp1_hit': bool(pos.get('tp1_hit', False)),
+                    'tp2': float(pos['tp2']) if pd.notna(pos.get('tp2')) else None,
+                    'tp2_hit': bool(pos.get('tp2_hit', False)),
+                    'tp3': float(pos['tp3']) if pd.notna(pos.get('tp3')) else None,
+                    'tp3_hit': bool(pos.get('tp3_hit', False)),
+                    'tp1_size': float(pos['tp1_size']) if pd.notna(pos.get('tp1_size')) else 0.30,
+                    'tp2_size': float(pos['tp2_size']) if pd.notna(pos.get('tp2_size')) else 0.35,
+                    'tp3_size': float(pos['tp3_size']) if pd.notna(pos.get('tp3_size')) else 1.0,
+                    'atr_pct': float(pos['atr_pct']) if pd.notna(pos.get('atr_pct')) else 0.05,
+                    'trailing_stop_enabled': bool(pos.get('trailing_stop_enabled', False)),
+                    'trailing_stop_active': bool(pos.get('trailing_stop_active', False)),
+                    'trailing_activation': 0.05,
+                    'trailing_atr_mult': 1.5,
+                    'tier': 3,
+                    'entry_features': {},
+                    'trade_id': int(pos['trade_id']) if pd.notna(pos.get('trade_id')) else None,
+                }
+
+            logger.success(f"✅ Loaded {len(self.positions)} positions from DB")
+
+            # Assign emergency SL to positions that had none
+            sl_fixed = 0
+            for ticker, p in self.positions.items():
+                if p['stop_loss'] is None or p.get('tp1') is None:
+                    entry = p['entry_price']
+                    p['stop_loss'] = entry * (1 - settings.STOP_LOSS_PCT)
+                    p['tp1'] = entry * 1.12
+                    p['tp2'] = entry * 1.25
+                    p['tp3'] = entry * 1.50
+                    p['tp1_size'] = 0.30
+                    p['tp2_size'] = 0.35
+                    p['tp3_size'] = 1.0
+                    # Also persist to DB
+                    self.db.upsert_position(
+                        ticker=ticker,
+                        quantity=p['quantity'],
+                        avg_buy_price=entry,
+                        current_price=p['current_price'],
+                        remaining_quantity=p['remaining_quantity'],
+                        stop_loss=p['stop_loss'],
+                        tp1=p['tp1'], tp1_hit=p['tp1_hit'], tp1_size=p['tp1_size'],
+                        tp2=p['tp2'], tp2_hit=p['tp2_hit'], tp2_size=p['tp2_size'],
+                        tp3=p['tp3'], tp3_hit=p['tp3_hit'], tp3_size=p['tp3_size'],
+                        atr_pct=p['atr_pct'],
+                        trailing_stop_enabled=p['trailing_stop_enabled'],
+                        trade_id=p['trade_id'],
+                    )
+                    sl_fixed += 1
+
+            if sl_fixed > 0:
+                logger.warning(f"⚠️ Assigned emergency TP/SL to {sl_fixed} unprotected positions")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to load positions from DB: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def _log_configuration(self):
         """Log current configuration"""
@@ -343,6 +421,11 @@ class TradingBot:
         probability = signal['probability']
 
         logger.info(f"💵 Evaluating trade: {ticker} (p={probability:.4f})")
+
+        # 0. Block duplicate: already have position in this ticker
+        if ticker in self.positions:
+            logger.warning(f"⚠️ Trade blocked: already holding {ticker}")
+            return
 
         # 1. Get current price
         current_price = self.binance.get_current_price(ticker)
@@ -811,12 +894,29 @@ class TradingBot:
                     # Get actual quantity from Binance
                     actual_quantity = balances[asset]['total']
 
-                    # Update position with current data
-                    self.db.upsert_position(
-                        ticker=ticker,
-                        quantity=actual_quantity,
-                        avg_buy_price=float(db_pos['avg_buy_price']),
-                        current_price=current_price
+                    # Update position prices ONLY — preserve TP/SL data
+                    remaining_qty = actual_quantity
+                    if 'remaining_quantity' in db_pos and pd.notna(db_pos['remaining_quantity']):
+                        remaining_qty = float(db_pos['remaining_quantity'])
+                    avg_price = float(db_pos['avg_buy_price'])
+                    total_val = remaining_qty * current_price
+                    pnl = (current_price - avg_price) * remaining_qty
+                    pnl_pct = ((current_price - avg_price) / avg_price) * 100 if avg_price > 0 else 0
+
+                    self.db.execute_command(
+                        """UPDATE positions
+                           SET quantity = :qty, current_price = :price,
+                               total_value = :total_val, pnl = :pnl,
+                               pnl_percentage = :pnl_pct, last_update = NOW()
+                           WHERE ticker = :ticker""",
+                        {
+                            'qty': actual_quantity,
+                            'price': current_price,
+                            'total_val': total_val,
+                            'pnl': pnl,
+                            'pnl_pct': pnl_pct,
+                            'ticker': ticker,
+                        }
                     )
 
                     logger.debug(f"  ✅ Synced {ticker}: {actual_quantity:.4f} @ ${current_price:.4f}")
