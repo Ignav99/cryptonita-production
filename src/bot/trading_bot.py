@@ -522,6 +522,98 @@ class TradingBot:
         return True
 
     # ============================================
+    # RISK MANAGEMENT: Circuit Breaker + Holding Period + Exposure
+    # ============================================
+
+    def _get_portfolio_drawdown(self) -> float:
+        """Calculate current portfolio drawdown from initial capital. Returns negative pct."""
+        portfolio = self.db.get_portfolio()
+        initial = portfolio['initial_capital']
+        current = portfolio['total_value']
+        if initial <= 0:
+            return 0.0
+        return (current - initial) / initial  # negative = drawdown
+
+    def _check_circuit_breaker(self) -> tuple:
+        """
+        Check portfolio-level circuit breaker.
+        Returns (can_trade, size_multiplier, reason).
+        """
+        drawdown = self._get_portfolio_drawdown()
+
+        if drawdown <= -settings.CIRCUIT_BREAKER_PAUSE_PCT:
+            return False, 0.0, f"CIRCUIT BREAKER: drawdown {drawdown*100:.1f}% exceeds -{settings.CIRCUIT_BREAKER_PAUSE_PCT*100:.0f}% limit — all new entries paused"
+
+        if drawdown <= -settings.CIRCUIT_BREAKER_REDUCE_PCT:
+            return True, 0.5, f"CIRCUIT BREAKER: drawdown {drawdown*100:.1f}% — position sizes reduced 50%"
+
+        return True, 1.0, ""
+
+    def _check_ticker_exposure(self, ticker: str, new_usd_value: float) -> tuple:
+        """Check per-ticker exposure limit. Returns (allowed, reason)."""
+        portfolio = self.db.get_portfolio()
+        portfolio_value = portfolio['total_value']
+        if portfolio_value <= 0:
+            return False, "Portfolio value is zero"
+
+        # Calculate current exposure for this ticker
+        current_exposure = 0.0
+        if ticker in self.positions:
+            pos = self.positions[ticker]
+            current_exposure = pos.get('current_price', pos['entry_price']) * pos['remaining_quantity']
+
+        total_exposure = current_exposure + new_usd_value
+        exposure_pct = total_exposure / portfolio_value
+
+        if exposure_pct > settings.MAX_TICKER_EXPOSURE_PCT:
+            return False, f"Ticker exposure {exposure_pct*100:.1f}% exceeds {settings.MAX_TICKER_EXPOSURE_PCT*100:.0f}% limit"
+
+        return True, ""
+
+    async def _enforce_holding_period(self):
+        """Check underwater positions and enforce max holding periods."""
+        now = datetime.utcnow()
+        for ticker, pos in list(self.positions.items()):
+            entry_time = pos.get('entry_time')
+            if not entry_time:
+                continue
+            if isinstance(entry_time, str):
+                entry_time = datetime.fromisoformat(entry_time)
+
+            days_held = (now - entry_time).total_seconds() / 86400
+            pnl_pct = (pos.get('current_price', pos['entry_price']) - pos['entry_price']) / pos['entry_price']
+
+            # Only apply to underwater positions (negative PnL)
+            if pnl_pct >= 0:
+                continue
+
+            if days_held >= settings.MAX_HOLD_DAYS_FORCE:
+                logger.warning(f"⏰ {ticker} underwater {pnl_pct*100:.1f}% for {days_held:.0f} days — FORCE CLOSE")
+                await self._execute_exit(ticker, pos['remaining_quantity'], pos['current_price'], 'time_exit_force')
+                del self.positions[ticker]
+                self.db.delete_position(ticker)
+
+            elif days_held >= settings.MAX_HOLD_DAYS_REVIEW:
+                # Reduce position by 50%
+                reduce_qty = pos['remaining_quantity'] * 0.5
+                if reduce_qty > 0:
+                    logger.warning(f"⏰ {ticker} underwater {pnl_pct*100:.1f}% for {days_held:.0f} days — reducing 50%")
+                    await self._execute_exit(ticker, reduce_qty, pos['current_price'], 'time_exit_partial')
+                    pos['remaining_quantity'] -= reduce_qty
+
+    async def _enforce_single_position_limit(self):
+        """Force close any single position down more than MAX_LOSS without recovery."""
+        for ticker, pos in list(self.positions.items()):
+            current_price = pos.get('current_price', pos['entry_price'])
+            pnl_pct = (current_price - pos['entry_price']) / pos['entry_price']
+
+            if pnl_pct <= -settings.SINGLE_POSITION_MAX_LOSS_PCT:
+                logger.warning(f"🛑 {ticker} down {pnl_pct*100:.1f}% — exceeds max single loss, FORCE CLOSE")
+                await self._execute_exit(ticker, pos['remaining_quantity'], current_price, 'circuit_breaker')
+                del self.positions[ticker]
+                self.db.delete_position(ticker)
+
+    # ============================================
     # TRADE EXECUTION
     # ============================================
 
@@ -547,6 +639,14 @@ class TradingBot:
         if ticker in self.positions:
             logger.warning(f"⚠️ Trade blocked: already holding {ticker}")
             return
+
+        # 0b. Circuit breaker check
+        can_trade, size_mult, cb_reason = self._check_circuit_breaker()
+        if not can_trade:
+            logger.warning(f"🚨 {cb_reason}")
+            return
+        if size_mult < 1.0:
+            logger.warning(f"⚠️ {cb_reason}")
 
         # 1. Get current price
         current_price = self.binance.get_current_price(ticker)
@@ -599,6 +699,18 @@ class TradingBot:
         quantity = position_info['quantity']
         usd_value = position_info['usd_value']
         confidence = position_info.get('confidence', 'exploratory')
+
+        # 4.2 Apply circuit breaker size reduction if active
+        if size_mult < 1.0:
+            quantity *= size_mult
+            usd_value *= size_mult
+            logger.info(f"📉 Circuit breaker: position reduced to {size_mult*100:.0f}% — ${usd_value:.2f}")
+
+        # 4.3 Check per-ticker exposure limit
+        exposure_ok, exposure_reason = self._check_ticker_exposure(ticker, usd_value)
+        if not exposure_ok:
+            logger.warning(f"⚠️ Trade blocked: {exposure_reason}")
+            return
 
         # 4.5 Check if we can afford this trade
         can_afford, afford_reason = self.db.can_afford_trade(usd_value)
@@ -779,6 +891,10 @@ class TradingBot:
         """Check all open positions with intelligent exit strategy"""
         logger.debug(f"👀 Monitoring {len(self.positions)} positions...")
 
+        # Pre-check: enforce risk limits before individual position checks
+        await self._enforce_single_position_limit()
+        await self._enforce_holding_period()
+
         for ticker, position in list(self.positions.items()):
             try:
                 # 1. Get current price
@@ -958,7 +1074,7 @@ class TradingBot:
                     ticker=ticker
                 )
 
-                # Log to database
+                # Log to database with exit reason
                 self.db.save_trade(
                     signal_id=None,
                     ticker=ticker,
@@ -967,7 +1083,8 @@ class TradingBot:
                     price=executed_price,
                     total_value=executed_value,
                     status='executed',
-                    probability=None  # SELL trades don't have model probability
+                    probability=None,
+                    exit_reason=reason.upper() if reason else None
                 )
 
         except Exception as e:

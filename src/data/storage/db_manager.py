@@ -313,7 +313,8 @@ class DatabaseManager:
         price: float,
         total_value: float,
         status: str = 'pending',
-        probability: Optional[float] = None
+        probability: Optional[float] = None,
+        exit_reason: Optional[str] = None
     ) -> int:
         """
         Save a trade execution
@@ -327,13 +328,14 @@ class DatabaseManager:
             total_value: Total USD value
             status: pending, executed, failed, or cancelled
             probability: Model confidence when trade was executed
+            exit_reason: Why the trade was closed (SL_HIT, TP1_HIT, ROTATION, TIME_EXIT, etc.)
 
         Returns:
             Trade ID
         """
         query = """
-        INSERT INTO trades (signal_id, ticker, action, quantity, price, total_value, status, probability, timestamp)
-        VALUES (:signal_id, :ticker, :action, :quantity, :price, :total_value, :status, :probability, :timestamp)
+        INSERT INTO trades (signal_id, ticker, action, quantity, price, total_value, status, probability, exit_reason, timestamp)
+        VALUES (:signal_id, :ticker, :action, :quantity, :price, :total_value, :status, :probability, :exit_reason, :timestamp)
         RETURNING id
         """
         params = {
@@ -345,6 +347,7 @@ class DatabaseManager:
             'total_value': total_value,
             'status': status,
             'probability': probability,
+            'exit_reason': exit_reason,
             'timestamp': datetime.utcnow()
         }
 

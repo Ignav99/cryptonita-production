@@ -64,6 +64,18 @@ class Settings(BaseSettings):
     MAX_TOTAL_RISK_PERCENT: float = Field(default=2.0, env="MAX_TOTAL_RISK_PERCENT")
     REQUIRE_MANUAL_APPROVAL: bool = Field(default=True, env="REQUIRE_MANUAL_APPROVAL")
 
+    # Circuit breaker: portfolio-level drawdown protection
+    CIRCUIT_BREAKER_REDUCE_PCT: float = 0.10   # -10% drawdown = reduce position sizes 50%
+    CIRCUIT_BREAKER_PAUSE_PCT: float = 0.15    # -15% drawdown = pause all new entries
+    SINGLE_POSITION_MAX_LOSS_PCT: float = 0.10 # Force close any position down >10%
+
+    # Maximum holding period for underwater positions
+    MAX_HOLD_DAYS_REVIEW: int = 5   # Underwater >5 days = reduce 50%
+    MAX_HOLD_DAYS_FORCE: int = 10   # Underwater >10 days = force close
+
+    # Per-ticker exposure limit
+    MAX_TICKER_EXPOSURE_PCT: float = 0.08  # Max 8% portfolio in one ticker
+
     # Prediction threshold — now uses 3-level confidence system per tier.
     # This is the global fallback; actual thresholds are in COIN_RISK_PROFILES.
     PREDICTION_THRESHOLD: float = 0.15  # Lowest exploratory threshold (overridden per tier)
