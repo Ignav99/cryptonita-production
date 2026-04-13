@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     TAKE_PROFIT_PCT: float = 0.20  # 20% base take profit (was 15%)
     STOP_LOSS_PCT: float = 0.05  # 5% stop loss
     MAX_PORTFOLIO_RISK_PCT: float = 0.30  # 30% max portfolio risk
-    MAX_POSITIONS: int = 6  # Reduced from 10: better risk per $10K capital
+    MAX_POSITIONS: int = 10  # Smart rotation will handle overflow
 
     # ============================================
     # SUPPORTED TICKERS (Altcoins volátiles para pumps +20%)
@@ -87,16 +87,24 @@ class Settings(BaseSettings):
     # - EXCLUYE: BTC, ETH, BNB (volatilidad <3%, no generan pumps +20%)
     #
     # Total: 40 monedas organizadas por categoría
-    # Reduced universe: only coins that generated signals in 14-day audit (Apr 2-13, 2026)
-    # Removed: T1 (5), T4 (5), dead T2 (6), dead T3 (7) = 23 coins eliminated
+    # Full 39-coin universe — maximize opportunity detection
+    # Smart rotation system will manage capital allocation
     TICKERS: List[str] = [
-        # Layer 2 (only AVAX generates signals from old T2)
-        "AVAXUSDT",
-        # Active T3 — all generated buy signals in audit period
-        "ARBUSDT", "OPUSDT", "APTUSDT", "LDOUSDT", "RUNEUSDT",
+        # Layer 1 / Layer 2
+        "SOLUSDT", "AVAXUSDT", "NEARUSDT", "APTUSDT", "SUIUSDT",
+        "SEIUSDT", "ARBUSDT", "OPUSDT", "INJUSDT",
+        # DeFi
+        "UNIUSDT", "AAVEUSDT", "LDOUSDT", "RUNEUSDT",
+        "CRVUSDT", "GMXUSDT", "DYDXUSDT",
+        # Gaming / Metaverse
         "SANDUSDT", "MANAUSDT", "AXSUSDT", "IMXUSDT", "GALAUSDT",
+        # AI / Compute
         "FETUSDT", "WLDUSDT", "RENDERUSDT",
-        "VETUSDT", "ALGOUSDT",
+        # Memecoins
+        "DOGEUSDT", "SHIBUSDT", "PEPEUSDT", "FLOKIUSDT", "BONKUSDT",
+        # Solid altcoins
+        "DOTUSDT", "ATOMUSDT", "ADAUSDT", "POLUSDT", "LINKUSDT",
+        "ICPUSDT", "FILUSDT", "HBARUSDT", "VETUSDT", "ALGOUSDT",
     ]
 
     # ============================================
@@ -107,19 +115,36 @@ class Settings(BaseSettings):
     #
     # BAND-PASS THRESHOLD SYSTEM (calibrated Apr 13, 2026)
     # Key insight: prob 0.30-0.35 = 94.7% WR, prob >0.42 = 0% WR
-    # threshold_medium = lower band (enter above this)
-    # threshold = upper band / ceiling (REJECT above this — model overfit)
-    # threshold_low = threshold_medium (exploratory disabled)
-    #
-    # All coins now single tier (T3) since T1/T2/T4 removed from universe.
-    # AVAX kept as T2 with slightly higher thresholds.
+    # threshold = CEILING (reject overfit signals above this)
+    # threshold_medium = FLOOR (minimum to enter)
+    # Smart rotation handles capital: swap weak positions for stronger signals
     COIN_RISK_PROFILES: Dict[str, Dict] = {
-        "AVAXUSDT":   {"tier": 2, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        # TIER 1 — Blue Chip (band-pass lowered to match model output range)
+        "LINKUSDT": {"tier": 1, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.15, "kelly_mult": 1.2},
+        "DOTUSDT":  {"tier": 1, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.15, "kelly_mult": 1.2},
+        "ADAUSDT":  {"tier": 1, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.15, "kelly_mult": 1.2},
+        "ATOMUSDT": {"tier": 1, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.15, "kelly_mult": 1.2},
+        "POLUSDT":  {"tier": 1, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.15, "kelly_mult": 1.2},
+        # TIER 2 — Large Cap
+        "SOLUSDT":  {"tier": 2, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "AVAXUSDT": {"tier": 2, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "NEARUSDT": {"tier": 2, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "UNIUSDT":  {"tier": 2, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "AAVEUSDT": {"tier": 2, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "ICPUSDT":  {"tier": 2, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "HBARUSDT": {"tier": 2, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        # TIER 3 — Mid Cap
         "ARBUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "OPUSDT":     {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        "INJUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        "SUIUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        "SEIUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "APTUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "LDOUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "RUNEUSDT":   {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        "CRVUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        "GMXUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        "DYDXUSDT":   {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "SANDUSDT":   {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "MANAUSDT":   {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "AXSUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
@@ -128,8 +153,15 @@ class Settings(BaseSettings):
         "FETUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "WLDUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "RENDERUSDT": {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        "FILUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "VETUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "ALGOUSDT":   {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        # TIER 4 — Meme (same band-pass, smaller positions)
+        "DOGEUSDT":  {"tier": 4, "threshold": 0.42, "threshold_medium": 0.30, "threshold_low": 0.30, "max_position_pct": 0.06, "kelly_mult": 0.5},
+        "SHIBUSDT":  {"tier": 4, "threshold": 0.42, "threshold_medium": 0.30, "threshold_low": 0.30, "max_position_pct": 0.06, "kelly_mult": 0.5},
+        "PEPEUSDT":  {"tier": 4, "threshold": 0.42, "threshold_medium": 0.30, "threshold_low": 0.30, "max_position_pct": 0.06, "kelly_mult": 0.5},
+        "FLOKIUSDT": {"tier": 4, "threshold": 0.42, "threshold_medium": 0.30, "threshold_low": 0.30, "max_position_pct": 0.06, "kelly_mult": 0.5},
+        "BONKUSDT":  {"tier": 4, "threshold": 0.42, "threshold_medium": 0.30, "threshold_low": 0.30, "max_position_pct": 0.06, "kelly_mult": 0.5},
     }
 
     # Default profile for tickers not in the map
