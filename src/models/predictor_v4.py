@@ -314,6 +314,16 @@ class TradingPredictorV4:
                 logger.warning(f"Could not calculate V4 features for {ticker}")
                 return 0, 0.0, {}
 
+            # Align feature vector to model's expected features
+            all_names = self.feature_engineer.selected_features or self.feature_engineer.required_features_v4
+            model_names = self.ensemble.feature_names
+            if model_names and len(all_names) != len(model_names):
+                name_to_val = dict(zip(all_names, feature_vector))
+                feature_vector = np.array([name_to_val.get(f, np.nan) for f in model_names])
+                log_names_final = model_names
+            else:
+                log_names_final = all_names
+
             # Get ensemble prediction
             X = feature_vector.reshape(1, -1)
             probability = float(self.ensemble.predict_proba(X)[0])
@@ -325,7 +335,7 @@ class TradingPredictorV4:
             prediction = 1 if confidence != "none" else 0
 
             # Features dict for logging
-            log_names = self.feature_engineer.selected_features or self.feature_engineer.required_features_v4
+            log_names = log_names_final
             features_dict = {
                 name: float(val) if not np.isnan(val) else None
                 for name, val in zip(log_names, feature_vector)

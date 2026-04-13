@@ -334,7 +334,7 @@ class TradingBot:
             logger.info(f"📊 Fetching data for {len(settings.TICKERS)} tickers from production...")
             tickers_data = {}
 
-            for ticker in settings.TICKERS:
+            for i, ticker in enumerate(settings.TICKERS):
                 try:
                     df = self.binance_data.get_historical_klines(ticker, '1d', 250)
                     if len(df) >= 200:
@@ -343,6 +343,9 @@ class TradingBot:
                         logger.warning(f"⚠️ Insufficient data for {ticker}: {len(df)} rows")
                 except Exception as e:
                     logger.error(f"❌ Failed to fetch {ticker}: {e}")
+                # Rate limit: pause every 10 tickers to stay under 6000 weight/min
+                if (i + 1) % 10 == 0:
+                    await asyncio.sleep(5)
 
             logger.info(f"✅ Fetched data for {len(tickers_data)} tickers")
 
@@ -978,6 +981,19 @@ class TradingBot:
         await self._enforce_single_position_limit()
         await self._enforce_holding_period()
 
+        # Pre-fetch shared data ONCE (avoid per-position API spam)
+        try:
+            btc_data_shared = self.binance_data.get_historical_klines('BTCUSDT', '1d', 250)
+        except Exception:
+            btc_data_shared = None
+        try:
+            macro_data_shared = await self.macro_fetcher.get_all_macro_data()
+        except Exception:
+            macro_data_shared = {}
+
+        from src.data.features_v4 import FeatureEngineerV4
+        feature_engineer_shared = FeatureEngineerV4()
+
         for ticker, position in list(self.positions.items()):
             try:
                 # 1. Get current price
@@ -997,16 +1013,10 @@ class TradingBot:
                 # 3. Get current market features for intelligent exit
                 try:
                     df = self.binance_data.get_historical_klines(ticker, '1d', 250)
-                    btc_data = self.binance_data.get_historical_klines('BTCUSDT', '1d', 250)
+                    await asyncio.sleep(0.5)  # Rate limit: avoid Binance ban
 
-                    # Get macro data (await since we're in async function)
-                    macro_data = await self.macro_fetcher.get_all_macro_data()
-
-                    # Calculate current features
-                    from src.data.features_v4 import FeatureEngineerV4
-                    feature_engineer = FeatureEngineerV4()
-                    df_with_features = feature_engineer.calculate_features(df, btc_data, macro_data)
-                    feature_vector = feature_engineer.get_feature_vector(df_with_features)
+                    df_with_features = feature_engineer_shared.calculate_features(df, btc_data_shared, macro_data_shared)
+                    feature_vector = feature_engineer_shared.get_feature_vector(df_with_features)
 
                     if len(feature_vector) > 0:
                         current_features = feature_vector.iloc[-1].to_dict()
