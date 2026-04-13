@@ -73,9 +73,10 @@ class KellyPositionSizer:
         max_position_usd: float = 500.0,
         kelly_mult: float = 1.0,
         max_position_pct_override: Optional[float] = None,
+        correlation_mult: float = 1.0,
     ) -> Dict[str, float]:
         """
-        Calculate position size with Kelly + regime scaling + tier adjustments.
+        Calculate position size with Kelly + regime scaling + tier adjustments + correlation penalty.
 
         Args:
             current_price: Current asset price
@@ -86,6 +87,7 @@ class KellyPositionSizer:
             max_position_usd: Hard cap on position size
             kelly_mult: Tier-based Kelly multiplier (e.g., 1.2 for blue chips, 0.5 for memes)
             max_position_pct_override: Tier-based max position % override
+            correlation_mult: Correlation penalty multiplier [0.5, 1.0] from CorrelationEngine
 
         Returns:
             Dict with quantity, usd_value, position_pct, kelly_raw
@@ -106,7 +108,10 @@ class KellyPositionSizer:
         regime_mult = self._get_regime_multiplier(regime_data)
         position_pct *= regime_mult
 
-        # Re-clamp after regime scaling
+        # Apply correlation penalty (reduces size for correlated positions)
+        position_pct *= correlation_mult
+
+        # Re-clamp after regime + correlation scaling
         position_pct = max(self.min_pct, min(effective_max_pct, position_pct))
 
         # Calculate USD value
@@ -123,11 +128,12 @@ class KellyPositionSizer:
             "kelly_raw": kelly_raw,
             "kelly_mult": kelly_mult,
             "regime_multiplier": regime_mult,
+            "correlation_multiplier": correlation_mult,
         }
 
         logger.debug(
             f"Kelly: raw={kelly_raw:.4f}, mult={kelly_mult}x, pct={position_pct*100:.1f}%, "
-            f"regime={regime_mult:.1f}x, usd=${usd_value:.2f}"
+            f"regime={regime_mult:.1f}x, corr={correlation_mult:.2f}x, usd=${usd_value:.2f}"
         )
 
         return result

@@ -135,6 +135,50 @@ class RegimeDetector:
             "regime_name": regime_name,
         }
 
+    def fast_regime_check(self, btc_df: pd.DataFrame) -> str:
+        """
+        Fast regime detection using 7d BTC returns + volatility.
+        Supplements the slower HMM for quicker regime change detection.
+        """
+        if btc_df is None or len(btc_df) < 10:
+            return "Sideways"
+
+        close = btc_df["close"].astype(float)
+        returns_7d = (close.iloc[-1] / close.iloc[-8] - 1) if len(close) >= 8 else 0
+        daily_returns = close.pct_change().dropna().tail(7)
+        vol_7d = float(daily_returns.std()) if len(daily_returns) >= 5 else 0.03
+
+        if returns_7d > 0.05 and vol_7d < 0.04:
+            return "Bull"
+        elif returns_7d < -0.08:
+            return "Bear"
+        elif vol_7d > 0.06:
+            return "Bear"  # High vol = defensive
+        else:
+            return "Sideways"
+
+    def get_composite_regime(self, btc_df: pd.DataFrame) -> Dict:
+        """
+        Combine HMM + fast regime. Use HMM when confident, fast otherwise.
+        Returns same format as predict().
+        """
+        hmm_result = self.predict(btc_df)
+        fast_regime = self.fast_regime_check(btc_df)
+
+        # If HMM has high confidence in a regime, trust it
+        bull_prob = hmm_result.get("regime_bull_prob", 0.33)
+        bear_prob = hmm_result.get("regime_bear_prob", 0.33)
+        max_prob = max(bull_prob, bear_prob, 1 - bull_prob - bear_prob)
+
+        if max_prob >= 0.7 and hmm_result.get("regime_name") != "unknown":
+            hmm_result["detection_method"] = "HMM"
+            return hmm_result
+
+        # Otherwise use fast regime
+        hmm_result["regime_name"] = fast_regime
+        hmm_result["detection_method"] = "fast"
+        return hmm_result
+
     def get_regime_multiplier(self, regime_data: Optional[Dict] = None) -> float:
         """
         Get position size multiplier based on regime.

@@ -117,6 +117,15 @@ class Settings(BaseSettings):
         # Solid altcoins
         "DOTUSDT", "ATOMUSDT", "ADAUSDT", "POLUSDT", "LINKUSDT",
         "ICPUSDT", "FILUSDT", "HBARUSDT", "VETUSDT", "ALGOUSDT",
+        # --- Phase 5 expansion (8 new coins) ---
+        # AI expansion
+        "TAOUSDT", "ARKMUSDT",
+        # RWA
+        "ONDOUSDT",
+        # Infra/DePIN
+        "ARUSDT", "IOTAUSDT",
+        # New L2
+        "STXUSDT", "TIAUSDT", "MANTAUSDT",
     ]
 
     # ============================================
@@ -174,6 +183,19 @@ class Settings(BaseSettings):
         "PEPEUSDT":  {"tier": 4, "threshold": 0.42, "threshold_medium": 0.30, "threshold_low": 0.30, "max_position_pct": 0.06, "kelly_mult": 0.5},
         "FLOKIUSDT": {"tier": 4, "threshold": 0.42, "threshold_medium": 0.30, "threshold_low": 0.30, "max_position_pct": 0.06, "kelly_mult": 0.5},
         "BONKUSDT":  {"tier": 4, "threshold": 0.42, "threshold_medium": 0.30, "threshold_low": 0.30, "max_position_pct": 0.06, "kelly_mult": 0.5},
+        # --- Phase 5 expansion risk profiles ---
+        # AI (Tier 3)
+        "TAOUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        "ARKMUSDT":   {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        # RWA (Tier 2 - institutional narrative)
+        "ONDOUSDT":   {"tier": 2, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        # Infra/DePIN (Tier 3)
+        "ARUSDT":     {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        "IOTAUSDT":   {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        # New L2 (Tier 3)
+        "STXUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        "TIAUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
+        "MANTAUSDT":  {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
     }
 
     # Default profile for tickers not in the map
@@ -227,6 +249,9 @@ class Settings(BaseSettings):
         "POLUSDT": "Polygon", "LINKUSDT": "Chainlink", "ICPUSDT": "Internet Computer",
         "FILUSDT": "Filecoin", "HBARUSDT": "Hedera", "VETUSDT": "VeChain",
         "ALGOUSDT": "Algorand",
+        "TAOUSDT": "Bittensor", "ARKMUSDT": "Arkham", "ONDOUSDT": "Ondo",
+        "ARUSDT": "Arweave", "IOTAUSDT": "IOTA", "STXUSDT": "Stacks",
+        "TIAUSDT": "Celestia", "MANTAUSDT": "Manta",
     }
 
     # ============================================
@@ -250,6 +275,80 @@ class Settings(BaseSettings):
     # ============================================
     LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")
     LOG_FILE: str = Field(default="logs/cryptonita.log", env="LOG_FILE")
+
+    # ============================================
+    # TELEGRAM NOTIFICATIONS
+    # ============================================
+    TELEGRAM_BOT_TOKEN: Optional[str] = Field(default=None, env="TELEGRAM_BOT_TOKEN")
+    TELEGRAM_CHAT_ID: Optional[str] = Field(default=None, env="TELEGRAM_CHAT_ID")
+    HEALTHCHECK_PING_URL: Optional[str] = Field(default=None, env="HEALTHCHECK_PING_URL")
+
+    # ============================================
+    # SECTOR ALLOCATION (max simultaneous positions per sector)
+    # ============================================
+    COIN_SECTORS: Dict[str, str] = {
+        # L1/L2
+        "SOLUSDT": "L1", "AVAXUSDT": "L1", "NEARUSDT": "L1", "APTUSDT": "L1",
+        "SUIUSDT": "L2", "SEIUSDT": "L2", "ARBUSDT": "L2", "OPUSDT": "L2", "INJUSDT": "L1",
+        # DeFi
+        "UNIUSDT": "DeFi", "AAVEUSDT": "DeFi", "LDOUSDT": "DeFi", "RUNEUSDT": "DeFi",
+        "CRVUSDT": "DeFi", "GMXUSDT": "DeFi", "DYDXUSDT": "DeFi",
+        # Gaming
+        "SANDUSDT": "Gaming", "MANAUSDT": "Gaming", "AXSUSDT": "Gaming",
+        "IMXUSDT": "Gaming", "GALAUSDT": "Gaming",
+        # AI
+        "FETUSDT": "AI", "WLDUSDT": "AI", "RENDERUSDT": "AI",
+        # Meme
+        "DOGEUSDT": "Meme", "SHIBUSDT": "Meme", "PEPEUSDT": "Meme",
+        "FLOKIUSDT": "Meme", "BONKUSDT": "Meme",
+        # Solid Alts
+        "DOTUSDT": "L1", "ATOMUSDT": "L1", "ADAUSDT": "L1", "POLUSDT": "L2",
+        "LINKUSDT": "L1", "ICPUSDT": "L1", "FILUSDT": "Infra",
+        "HBARUSDT": "L1", "VETUSDT": "L1", "ALGOUSDT": "L1",
+        # New: AI expansion
+        "TAOUSDT": "AI", "ARKMUSDT": "AI",
+        # New: RWA
+        "ONDOUSDT": "RWA",
+        # New: Infra/DePIN
+        "ARUSDT": "Infra", "IOTAUSDT": "Infra",
+        # New: L2
+        "STXUSDT": "L2", "TIAUSDT": "L1", "MANTAUSDT": "L2",
+        "ZKUSDT": "L2", "STRKUSDT": "L2",
+        # New: Gaming
+        "BEAMUSDT": "Gaming",
+    }
+
+    SECTOR_LIMITS: Dict[str, int] = {
+        "L1": 4, "L2": 3, "DeFi": 3, "AI": 3,
+        "Gaming": 2, "Meme": 2, "RWA": 2, "Infra": 2,
+    }
+
+    # ============================================
+    # REGIME-BASED PARAMETER ADJUSTMENTS
+    # ============================================
+    REGIME_ADJUSTMENTS: Dict[str, Dict] = {
+        "Bull": {
+            "max_positions": 10,
+            "threshold_offset": -0.02,
+            "position_size_mult": 1.0,
+            "stop_loss_pct": 0.05,
+            "take_profit_pct": 0.25,
+        },
+        "Sideways": {
+            "max_positions": 7,
+            "threshold_offset": 0.0,
+            "position_size_mult": 0.7,
+            "stop_loss_pct": 0.05,
+            "take_profit_pct": 0.20,
+        },
+        "Bear": {
+            "max_positions": 4,
+            "threshold_offset": 0.05,
+            "position_size_mult": 0.4,
+            "stop_loss_pct": 0.04,
+            "take_profit_pct": 0.12,
+        },
+    }
 
     # ============================================
     # SYSTEM

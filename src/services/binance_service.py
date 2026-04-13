@@ -569,6 +569,51 @@ class BinanceService:
             logger.error(f"❌ Failed to create OCO order: {e}")
             return None
 
+    def create_stop_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        stop_price: float,
+        limit_price: float
+    ) -> Optional[Dict]:
+        """
+        Create a STOP_LOSS_LIMIT order (server-side SL protection).
+        """
+        try:
+            logger.info(f"🛡️ Creating STOP_LIMIT {side}: {symbol} qty={quantity} stop=${stop_price}")
+            order = self._api_call_with_retry(
+                self.client.create_order,
+                symbol=symbol,
+                side=side,
+                type='STOP_LOSS_LIMIT',
+                timeInForce='GTC',
+                quantity=quantity,
+                price=str(limit_price),
+                stopPrice=str(stop_price),
+            )
+            logger.success(f"✅ Stop-limit order placed: {order['orderId']}")
+            return order
+        except BinanceAPIException as e:
+            logger.error(f"❌ Stop-limit order failed: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Stop-limit order error: {e}")
+            return None
+
+    def cancel_all_open_orders(self, symbol: str) -> int:
+        """Cancel all open orders for a symbol. Returns count cancelled."""
+        try:
+            orders = self.get_open_orders(symbol=symbol)
+            cancelled = 0
+            for order in orders:
+                if self.cancel_order(symbol, order['orderId']):
+                    cancelled += 1
+            return cancelled
+        except Exception as e:
+            logger.error(f"❌ Failed to cancel all orders for {symbol}: {e}")
+            return 0
+
     def cancel_order(self, symbol: str, order_id: int) -> bool:
         """
         Cancel an open order

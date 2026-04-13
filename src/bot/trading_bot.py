@@ -22,6 +22,8 @@ from src.services.binance_data_service import BinanceDataService
 from src.data.storage.db_manager import DatabaseManager
 from src.data.macro_data import MacroDataFetcher
 from src.trading.dynamic_risk_manager import DynamicRiskManager
+from src.services.telegram_notifier import TelegramNotifier
+from src.models.correlation_engine import CorrelationEngine
 
 
 class TradingBot:
@@ -50,6 +52,8 @@ class TradingBot:
         self.db = DatabaseManager(settings.get_database_url())
         self.macro_fetcher = MacroDataFetcher()
         self.risk_manager = DynamicRiskManager()  # Dynamic TP/SL management
+        self.notifier = TelegramNotifier(settings.TELEGRAM_BOT_TOKEN, settings.TELEGRAM_CHAT_ID)
+        self.correlation_engine = CorrelationEngine()
 
         logger.info("💡 Using Binance PRODUCTION for data, TESTNET for trading")
 
@@ -59,6 +63,9 @@ class TradingBot:
         self.daily_loss = 0.0
         self.last_scan_time = None
         self.positions: Dict[str, Dict] = {}
+        self._current_regime: Dict = {}
+        self._regime_max_positions: int = settings.MAX_POSITIONS
+        self._regime_threshold_offset: float = 0.0
 
         # Trading parameters from config
         self.scan_interval_hours = self.config['trading']['scan_interval_hours']
@@ -304,6 +311,7 @@ class TradingBot:
 
             except Exception as e:
                 logger.error(f"❌ Error in market scan loop: {e}")
+                await self.notifier.notify_error(str(e), context="Market scan loop")
                 await asyncio.sleep(300)  # Wait 5 minutes on error
 
     async def _scan_market(self):
@@ -342,6 +350,23 @@ class TradingBot:
             # Incluir BTCUSDT para features de correlación
             tickers_data_with_btc = {'BTCUSDT': btc_data, **tickers_data}
             self._save_prices_to_db(tickers_data_with_btc)
+
+            # 3c. Update correlation engine with latest returns
+            self.correlation_engine.update_returns(tickers_data_with_btc)
+
+            # 3d. Detect market regime and apply adjustments
+            from src.models.regime_detector import RegimeDetector
+            regime_detector = RegimeDetector()
+            regime_result = regime_detector.get_composite_regime(btc_data)
+            regime_name = regime_result.get('regime_name', 'Sideways')
+            self._current_regime = regime_result
+            logger.info(f"📊 Market regime: {regime_name} (method: {regime_result.get('detection_method', 'N/A')})")
+
+            # Apply regime-based parameter adjustments
+            regime_adj = settings.REGIME_ADJUSTMENTS.get(regime_name, settings.REGIME_ADJUSTMENTS['Sideways'])
+            self._regime_max_positions = regime_adj['max_positions']
+            self._regime_threshold_offset = regime_adj['threshold_offset']
+            logger.info(f"📊 Regime overrides: max_positions={self._regime_max_positions}, threshold_offset={self._regime_threshold_offset:+.2f}")
 
             # 4. Make predictions
             logger.info("🔮 Making predictions...")
@@ -386,10 +411,20 @@ class TradingBot:
             self.last_scan_time = datetime.utcnow()
             logger.success(f"✅ Market scan complete - Cycle #{self.cycle_number}")
 
+            # Healthcheck ping (if configured)
+            if settings.HEALTHCHECK_PING_URL:
+                try:
+                    import httpx
+                    async with httpx.AsyncClient(timeout=10) as hc:
+                        await hc.get(settings.HEALTHCHECK_PING_URL)
+                except Exception:
+                    pass  # Non-critical
+
         except Exception as e:
             logger.error(f"❌ Market scan failed: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            await self.notifier.notify_error(str(e), context="Market scan")
 
             # Update bot status with error
             self.db.update_bot_status(
@@ -644,9 +679,28 @@ class TradingBot:
         can_trade, size_mult, cb_reason = self._check_circuit_breaker()
         if not can_trade:
             logger.warning(f"🚨 {cb_reason}")
+            await self.notifier.notify_circuit_breaker(self.daily_loss, cb_reason)
             return
         if size_mult < 1.0:
             logger.warning(f"⚠️ {cb_reason}")
+
+        # 0c. Sector allocation check
+        sector = settings.COIN_SECTORS.get(ticker)
+        if sector:
+            sector_limit = settings.SECTOR_LIMITS.get(sector, 3)
+            sector_count = sum(
+                1 for t in self.positions
+                if settings.COIN_SECTORS.get(t) == sector
+            )
+            if sector_count >= sector_limit:
+                logger.warning(f"⚠️ Trade blocked: sector '{sector}' at capacity ({sector_count}/{sector_limit})")
+                return
+
+        # 0d. Regime max positions check
+        regime_max = getattr(self, '_regime_max_positions', settings.MAX_POSITIONS)
+        if len(self.positions) >= regime_max:
+            logger.warning(f"⚠️ Trade blocked: regime limit {regime_max} positions reached")
+            # Still allow smart rotation below
 
         # 1. Get current price
         current_price = self.binance.get_current_price(ticker)
@@ -699,6 +753,14 @@ class TradingBot:
         quantity = position_info['quantity']
         usd_value = position_info['usd_value']
         confidence = position_info.get('confidence', 'exploratory')
+
+        # 4.1b Apply correlation penalty
+        held_tickers = list(self.positions.keys())
+        corr_penalty = self.correlation_engine.get_correlation_penalty(ticker, held_tickers)
+        if corr_penalty < 1.0:
+            quantity *= corr_penalty
+            usd_value *= corr_penalty
+            logger.info(f"📊 Correlation penalty: {corr_penalty:.2f}x — ${usd_value:.2f}")
 
         # 4.2 Apply circuit breaker size reduction if active
         if size_mult < 1.0:
@@ -796,6 +858,20 @@ class TradingBot:
         if oco_order:
             logger.success(f"✅ OCO order placed for {ticker} (TP1: 30% position)")
 
+        # 8b. Place STOP_LOSS_LIMIT for remaining 70% (server-side protection)
+        remaining_qty = executed_qty - oco_quantity
+        remaining_qty = self.binance.round_quantity(ticker, remaining_qty)
+        if remaining_qty > 0:
+            sl_order = self.binance.create_stop_limit_order(
+                symbol=ticker,
+                side='SELL',
+                quantity=remaining_qty,
+                stop_price=sl_price,
+                limit_price=sl_limit_price,
+            )
+            if sl_order:
+                logger.success(f"✅ SL order placed for {ticker} remaining 70% ({remaining_qty})")
+
         # 9. Log trade to database
         # Get signal_id from the most recent signal for this ticker
         recent_signals = self.db.get_recent_signals(limit=100, min_probability=0.0)
@@ -866,6 +942,13 @@ class TradingBot:
         }
 
         logger.success(f"✅ Trade complete: {ticker} position opened with dynamic TP/SL")
+
+        # 11. Telegram notification
+        await self.notifier.notify_trade(
+            action="BUY", ticker=ticker, price=executed_price,
+            quantity=executed_qty, usd_value=executed_value,
+            confidence=confidence, probability=probability,
+        )
 
     # ============================================
     # POSITION MONITORING (every 5 minutes)
@@ -1051,6 +1134,11 @@ class TradingBot:
             if ticker in self.positions:
                 entry_price = self.positions[ticker].get('entry_price', price)
 
+            # Cancel all open orders for this ticker before selling
+            cancelled = self.binance.cancel_all_open_orders(ticker)
+            if cancelled > 0:
+                logger.info(f"🗑️ Cancelled {cancelled} open orders for {ticker}")
+
             # Round quantity
             quantity = self.binance.round_quantity(ticker, quantity)
 
@@ -1066,6 +1154,13 @@ class TradingBot:
                 sale_pnl = (executed_price - entry_price) * executed_qty
 
                 logger.success(f"✅ SELL executed: {executed_qty} {ticker} @ ${executed_price:.2f} | P&L: ${sale_pnl:+.2f} | Reason: {reason}")
+
+                # Telegram notification
+                await self.notifier.notify_trade(
+                    action="SELL", ticker=ticker, price=executed_price,
+                    quantity=executed_qty, usd_value=executed_value,
+                    pnl=sale_pnl, reason=reason,
+                )
 
                 # Add proceeds to available balance
                 self.db.add_to_balance(
