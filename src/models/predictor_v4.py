@@ -163,16 +163,21 @@ class TradingPredictorV4:
 
     def _classify_confidence(self, probability: float, profile: Dict) -> str:
         """
-        Classify signal into confidence level based on probability and tier thresholds.
+        Band-pass confidence filter.
+        threshold = CEILING (reject overfit signals above this)
+        threshold_medium = FLOOR (minimum to enter)
 
-        Returns: "high", "medium", "exploratory", or "none"
+        Returns: "medium" (in band), or "none" (outside band)
         """
-        if probability >= profile["threshold"]:
-            return "high"
-        elif probability >= profile.get("threshold_medium", profile["threshold"]):
+        ceiling = profile["threshold"]  # 0.42 — reject above
+        floor = profile.get("threshold_medium", profile["threshold"])  # 0.28
+
+        if probability >= ceiling:
+            # REJECT: model overfit zone (0% WR in audit data)
+            return "none"
+        elif probability >= floor:
+            # SWEET SPOT: band-pass zone (94.7% WR in 0.30-0.35 range)
             return "medium"
-        elif probability >= profile.get("threshold_low", profile["threshold"]):
-            return "exploratory"
         return "none"
 
     def get_signal_confidence(self, ticker: str, probability: float) -> str:

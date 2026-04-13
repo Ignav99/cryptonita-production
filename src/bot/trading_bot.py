@@ -76,7 +76,7 @@ class TradingBot:
         return {
             "trading": {
                 "scan_interval_hours": 12,
-                "position_monitoring_minutes": 15,
+                "position_monitoring_minutes": 5,  # Reduced from 15: faster SL/TP checks
                 "auto_trading_enabled": True,
                 "require_manual_approval": False
             },
