@@ -318,9 +318,10 @@ class TradingPredictorV4:
             X = feature_vector.reshape(1, -1)
             probability = float(self.ensemble.predict_proba(X)[0])
 
-            # Use dynamic threshold per ticker with 3 confidence levels
+            # Use dynamic threshold per ticker with z-score enhanced confidence
             profile = self._get_ticker_profile(ticker)
-            confidence = self._classify_confidence(probability, profile)
+            self._update_prob_history(ticker, probability)
+            confidence = self._classify_confidence(probability, profile, ticker)
             prediction = 1 if confidence != "none" else 0
 
             # Features dict for logging
@@ -403,7 +404,8 @@ class TradingPredictorV4:
             mask = predictions_df.apply(
                 lambda row: self._classify_confidence(
                     row["probability"],
-                    self._get_ticker_profile(row["ticker"])
+                    self._get_ticker_profile(row["ticker"]),
+                    row["ticker"]
                 ) != "none",
                 axis=1,
             )
@@ -424,7 +426,7 @@ class TradingPredictorV4:
         Returns (should_trade, reason).
         """
         profile = self._get_ticker_profile(ticker)
-        confidence = self._classify_confidence(probability, profile)
+        confidence = self._classify_confidence(probability, profile, ticker)
 
         if confidence == "none":
             lowest = profile.get("threshold_low", profile["threshold"])
@@ -470,7 +472,7 @@ class TradingPredictorV4:
         Calculate position size using Kelly Criterion with tier + confidence adjustments.
         """
         profile = self._get_ticker_profile(ticker)
-        confidence = self._classify_confidence(probability, profile)
+        confidence = self._classify_confidence(probability, profile, ticker)
         conf_config = settings.CONFIDENCE_LEVELS.get(confidence, settings.CONFIDENCE_LEVELS["exploratory"])
         position_mult = conf_config.get("position_mult", 0.25)
 
