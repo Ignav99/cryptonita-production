@@ -401,6 +401,127 @@ class TradingBot:
             )
 
     # ============================================
+    # SMART ROTATION SYSTEM
+    # ============================================
+
+    # Binance commission: 0.1% per trade; rotation = sell + buy = 0.2%
+    ROTATION_COMMISSION_PCT = 0.002
+
+    def _calculate_signal_ev(self, probability: float, ticker: str) -> float:
+        """
+        Calculate expected value of a new buy signal.
+        EV = P(win) * avg_gain - P(loss) * avg_loss
+        """
+        # Weighted TP: TP1 hit ~60%, TP2 ~25%, TP3 ~10%
+        avg_gain_pct = 0.12 * 0.60 + 0.25 * 0.25 + 0.50 * 0.10  # ~0.185
+        avg_loss_pct = settings.STOP_LOSS_PCT  # 0.05
+
+        ev = probability * avg_gain_pct - (1 - probability) * avg_loss_pct
+        return ev
+
+    def _calculate_position_score(self, ticker: str, position: dict) -> float:
+        """
+        Score an open position's remaining value.
+        Lower score = weaker = better rotation candidate.
+        Factors: current PnL, remaining upside, time held, SL buffer.
+        """
+        entry_price = position['entry_price']
+        current_price = position.get('current_price', entry_price)
+
+        # 1. Current unrealized PnL %
+        pnl_pct = (current_price - entry_price) / entry_price if entry_price > 0 else 0
+
+        # 2. Remaining upside to next unfilled TP
+        remaining_upside = 0
+        if not position.get('tp1_hit') and position.get('tp1'):
+            remaining_upside = (position['tp1'] - current_price) / current_price
+        elif not position.get('tp2_hit') and position.get('tp2'):
+            remaining_upside = (position['tp2'] - current_price) / current_price
+        elif not position.get('tp3_hit') and position.get('tp3'):
+            remaining_upside = (position['tp3'] - current_price) / current_price
+        else:
+            remaining_upside = 0.02  # All TPs hit, small trailing upside
+        remaining_upside = max(remaining_upside, 0)
+
+        # 3. Time decay — penalize stale capital (linear decay over 5 days)
+        entry_time = position.get('entry_time')
+        if entry_time:
+            if isinstance(entry_time, str):
+                entry_time = datetime.fromisoformat(entry_time)
+            hours_held = (datetime.utcnow() - entry_time).total_seconds() / 3600
+            time_factor = max(0.1, 1 - hours_held / (5 * 24))
+        else:
+            time_factor = 0.5
+
+        # 4. SL buffer — further from SL = safer position
+        stop_loss = position.get('stop_loss', entry_price * 0.95)
+        sl_distance_pct = (current_price - stop_loss) / current_price if current_price > 0 else 0.05
+
+        # Weighted score: PnL(40%) + upside*freshness(40%) + safety(20%)
+        score = pnl_pct * 0.4 + remaining_upside * time_factor * 0.4 + sl_distance_pct * 0.2
+        return score
+
+    async def _attempt_smart_rotation(
+        self, new_signal: pd.Series, new_price: float, portfolio_value: float
+    ) -> bool:
+        """
+        Sell weakest position if new signal has higher EV.
+        Returns True if a position was sold (freeing capital + slot).
+        """
+        if not self.positions:
+            return False
+
+        new_ticker = new_signal['ticker']
+        new_prob = new_signal['probability']
+
+        # Calculate EV of new signal
+        new_ev = self._calculate_signal_ev(new_prob, new_ticker)
+
+        # Find weakest position
+        weakest_ticker = None
+        weakest_score = float('inf')
+        weakest_pos = None
+
+        for ticker, pos in self.positions.items():
+            score = self._calculate_position_score(ticker, pos)
+            if score < weakest_score:
+                weakest_score = score
+                weakest_ticker = ticker
+                weakest_pos = pos
+
+        if weakest_ticker is None:
+            return False
+
+        # Decision: new EV must exceed weakest score + rotation cost
+        if new_ev - self.ROTATION_COMMISSION_PCT <= weakest_score:
+            logger.info(
+                f"📊 Rotation rejected: {new_ticker} EV={new_ev:.4f} vs "
+                f"{weakest_ticker} score={weakest_score:.4f} + cost={self.ROTATION_COMMISSION_PCT}"
+            )
+            return False
+
+        # Execute rotation: sell weakest
+        logger.info(
+            f"🔄 SMART ROTATION: Selling {weakest_ticker} (score={weakest_score:.4f}) "
+            f"for {new_ticker} (EV={new_ev:.4f})"
+        )
+
+        await self._execute_exit(
+            weakest_ticker,
+            weakest_pos['remaining_quantity'],
+            weakest_pos['current_price'],
+            f"rotation_for_{new_ticker}"
+        )
+
+        # Clean up
+        if weakest_ticker in self.positions:
+            del self.positions[weakest_ticker]
+        self.db.delete_position(weakest_ticker)
+
+        logger.success(f"✅ Rotated out {weakest_ticker} — slot and capital freed for {new_ticker}")
+        return True
+
+    # ============================================
     # TRADE EXECUTION
     # ============================================
 
@@ -442,12 +563,26 @@ class TradingBot:
 
         # 3. Check if we should trade
         current_positions = len(self.positions)
+        rotation_attempted = False
         should_trade, reason = self.predictor.should_trade(
             ticker=ticker,
             probability=probability,
             current_positions=current_positions,
             daily_loss=self.daily_loss
         )
+
+        # 3b. If blocked by max positions, attempt smart rotation
+        if not should_trade and "Max positions" in reason and len(self.positions) > 0:
+            rotated = await self._attempt_smart_rotation(signal, current_price, portfolio_value)
+            rotation_attempted = True
+            if rotated:
+                # Re-check with updated position count
+                portfolio = self.db.get_portfolio()
+                available_balance = portfolio['available_balance']
+                should_trade, reason = self.predictor.should_trade(
+                    ticker=ticker, probability=probability,
+                    current_positions=len(self.positions), daily_loss=self.daily_loss
+                )
 
         if not should_trade:
             logger.warning(f"⚠️ Trade blocked: {reason}")
@@ -467,6 +602,15 @@ class TradingBot:
 
         # 4.5 Check if we can afford this trade
         can_afford, afford_reason = self.db.can_afford_trade(usd_value)
+
+        # 4.6 If can't afford and rotation not yet tried, attempt it
+        if not can_afford and not rotation_attempted and len(self.positions) > 0:
+            rotated = await self._attempt_smart_rotation(signal, current_price, portfolio_value)
+            if rotated:
+                portfolio = self.db.get_portfolio()
+                available_balance = portfolio['available_balance']
+                can_afford, afford_reason = self.db.can_afford_trade(usd_value)
+
         if not can_afford:
             logger.warning(f"⚠️ Trade blocked: {afford_reason}")
             return
