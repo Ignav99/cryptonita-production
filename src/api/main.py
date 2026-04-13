@@ -13,6 +13,8 @@ from loguru import logger
 
 from config import settings
 from src.api.routes import auth, dashboard, controls, websocket
+from src.bot.bot_manager import BotManager
+from src.data.storage.db_manager import DatabaseManager
 
 # Create FastAPI app
 app = FastAPI(
@@ -152,9 +154,13 @@ async def startup_event():
     logger.info(f"API running on: http://{settings.API_HOST}:{settings.API_PORT}")
     logger.info("=" * 60)
 
-    # Self-ping to keep Render free tier alive (every 10 minutes)
+    # Self-ping to keep Render alive (every 10 minutes)
     if settings.ENVIRONMENT == "production":
         asyncio.create_task(_keep_alive_loop())
+
+    # Auto-start bot and launch watchdog
+    asyncio.create_task(_auto_start_bot())
+    asyncio.create_task(_bot_watchdog_loop())
 
 
 async def _keep_alive_loop():
@@ -163,7 +169,7 @@ async def _keep_alive_loop():
     import httpx
 
     await asyncio.sleep(60)  # Wait 1 min after startup
-    url = "https://cryptonita-bot.onrender.com/health"
+    url = "https://cryptonita-production.onrender.com/health"
 
     while True:
         try:
@@ -172,6 +178,78 @@ async def _keep_alive_loop():
         except Exception:
             pass
         await asyncio.sleep(600)  # Every 10 minutes
+
+
+async def _auto_start_bot():
+    """Auto-start the trading bot 10 seconds after API startup."""
+    import asyncio
+    await asyncio.sleep(10)
+
+    bot_manager = BotManager()
+    if bot_manager.is_running():
+        logger.info("Bot already running, skipping auto-start")
+        return
+
+    logger.info("Auto-starting trading bot...")
+    result = bot_manager.start(mode="auto")
+    if result["success"]:
+        try:
+            db = DatabaseManager(settings.get_database_url())
+            db.update_bot_status(
+                status='running',
+                total_signals=0,
+                buy_signals=0,
+                cycle_number=0,
+                last_error=None
+            )
+            db.close()
+        except Exception as e:
+            logger.warning(f"Could not update bot status in DB: {e}")
+        logger.success(f"Bot auto-started (PID: {result['pid']})")
+    else:
+        logger.error(f"Bot auto-start failed: {result['message']}")
+
+
+async def _bot_watchdog_loop():
+    """Check bot health every 5 minutes. Restart if dead."""
+    import asyncio
+    await asyncio.sleep(120)  # Wait 2 min after startup before first check
+
+    bot_manager = BotManager()
+    consecutive_dead = 0
+
+    while True:
+        try:
+            if not bot_manager.is_running():
+                consecutive_dead += 1
+                logger.warning(f"Watchdog: bot not running (count: {consecutive_dead})")
+
+                if consecutive_dead >= 2:  # Dead for 2 consecutive checks (~10 min)
+                    logger.warning("Watchdog: restarting bot...")
+                    result = bot_manager.start(mode="auto")
+                    if result["success"]:
+                        try:
+                            db = DatabaseManager(settings.get_database_url())
+                            db.update_bot_status(
+                                status='running',
+                                total_signals=0,
+                                buy_signals=0,
+                                cycle_number=0,
+                                last_error=None
+                            )
+                            db.close()
+                        except Exception:
+                            pass
+                        logger.success(f"Watchdog: bot restarted (PID: {result['pid']})")
+                        consecutive_dead = 0
+                    else:
+                        logger.error(f"Watchdog: restart failed - {result['message']}")
+            else:
+                consecutive_dead = 0
+        except Exception as e:
+            logger.error(f"Watchdog error: {e}")
+
+        await asyncio.sleep(300)  # Check every 5 minutes
 
 
 @app.on_event("shutdown")

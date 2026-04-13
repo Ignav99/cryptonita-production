@@ -97,7 +97,7 @@ export MALLOC_TRIM_THRESHOLD_=65536
 
 # Start the API server (which will serve the frontend too)
 echo "🌐 Starting API server..."
-echo "📍 API will be available at: https://cryptonita-bot.onrender.com"
+echo "📍 API will be available at: https://cryptonita-production.onrender.com"
 echo "🤖 Bot can be controlled via the dashboard"
 
 # Use gunicorn for production with uvicorn workers

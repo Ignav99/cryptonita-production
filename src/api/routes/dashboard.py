@@ -55,6 +55,7 @@ async def get_positions(current_user: dict = Depends(get_current_user)):
     """
     try:
         positions_df = db.get_positions()
+        positions_df = positions_df.where(positions_df.notna(), None)
         positions = positions_df.to_dict('records')
         return [Position(**pos) for pos in positions]
     except Exception as e:
@@ -73,6 +74,7 @@ async def get_closed_positions(
         closed_df = db.get_closed_positions(limit=limit)
         if len(closed_df) == 0:
             return []
+        closed_df = closed_df.where(closed_df.notna(), None)
         closed_positions = closed_df.to_dict('records')
         return closed_positions
     except Exception as e:
@@ -313,6 +315,7 @@ async def get_recent_trades(
     """
     try:
         trades_df = db.get_recent_trades(limit=limit)
+        trades_df = trades_df.where(trades_df.notna(), None)
         trades = trades_df.to_dict('records')
         return [Trade(**trade) for trade in trades]
     except Exception as e:
