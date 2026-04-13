@@ -25,11 +25,13 @@ class TripleBarrierLabeler:
         sl_atr_mult: float = 1.5,
         max_holding_days: int = 15,
         atr_period: int = 14,
+        forward_skip: int = 3,
     ):
         self.tp_atr_mult = tp_atr_mult
         self.sl_atr_mult = sl_atr_mult
         self.max_holding_days = max_holding_days
         self.atr_period = atr_period
+        self.forward_skip = forward_skip  # Bars between features and entry to break autocorrelation
 
     def _compute_atr(self, df: pd.DataFrame) -> pd.Series:
         """Compute ATR(14)"""
@@ -80,22 +82,27 @@ class TripleBarrierLabeler:
             if np.isnan(atr.iloc[i]):
                 continue
 
-            entry = closes[i]
-            current_atr = atr.iloc[i]
+            # Forward skip: enter at close[i + forward_skip] to break autocorrelation
+            entry_idx = i + self.forward_skip
+            if entry_idx >= n:
+                continue
+
+            entry = closes[entry_idx]
+            current_atr = atr.iloc[i]  # ATR from feature bar, not entry bar
             tp = entry + self.tp_atr_mult * current_atr
             sl = entry - self.sl_atr_mult * current_atr
             tp_prices[i] = tp
             sl_prices[i] = sl
 
-            end_idx = min(i + self.max_holding_days, n)
+            end_idx = min(entry_idx + self.max_holding_days, n)
 
             best_excursion = 0.0
             worst_excursion = 0.0
             label = 0  # Default: time expired
             hit = "time"
-            held = end_idx - i
+            held = end_idx - entry_idx
 
-            for j in range(i + 1, end_idx):
+            for j in range(entry_idx + 1, end_idx):
                 # Track excursions
                 high_exc = (highs[j] - entry) / entry
                 low_exc = (lows[j] - entry) / entry

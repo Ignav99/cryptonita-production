@@ -77,6 +77,9 @@ class FeatureEngineerV4(FeatureEngineer):
             "reddit_mentions_24h", "reddit_sentiment", "social_buzz_score",
             # Whale
             "whale_tx_count_24h", "whale_net_flow", "whale_activity_score",
+            # Mean-Reversion
+            "price_zscore_20", "price_zscore_50", "return_5d_pct",
+            "return_10d_pct", "overextension_score",
         ]
 
     # ------------------------------------------------------------------
@@ -131,6 +134,9 @@ class FeatureEngineerV4(FeatureEngineer):
         df = self._calculate_cross_asset_features(df, btc_df, eth_df)
         df = self._calculate_advanced_ta_features(df)
         df = self._calculate_regime_features(df, regime_data)
+
+        # --- V4.2 mean-reversion features ---
+        df = self._calculate_mean_reversion_features(df)
 
         # --- V4.1 new features (news, social, whale) ---
         df = self._calculate_news_features(df, news_data)
@@ -333,6 +339,37 @@ class FeatureEngineerV4(FeatureEngineer):
         vol_60 = returns.rolling(60).std()
         # >1 = expanding vol, <1 = contracting vol
         df["volatility_regime"] = np.where(vol_60 > 0, vol_20 / vol_60, 1.0)
+
+        return df
+
+    def _calculate_mean_reversion_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Mean-reversion features (5) — penalize overextended prices, detect reversion setups."""
+        close = df["close"]
+
+        # 1. Price z-score vs 20-day mean (how many std devs from short-term average)
+        sma_20 = close.rolling(20).mean()
+        std_20 = close.rolling(20).std()
+        df["price_zscore_20"] = (close - sma_20) / std_20.replace(0, np.nan)
+
+        # 2. Price z-score vs 50-day mean (medium-term overextension)
+        sma_50 = close.rolling(50).mean()
+        std_50 = close.rolling(50).std()
+        df["price_zscore_50"] = (close - sma_50) / std_50.replace(0, np.nan)
+
+        # 3. Recent 5-day return (captures recent pump/dump)
+        df["return_5d_pct"] = close.pct_change(5)
+
+        # 4. Recent 10-day return
+        df["return_10d_pct"] = close.pct_change(10)
+
+        # 5. Overextension composite (0-1 scale, high = price overextended upward)
+        # Normalize RSI to 0-1, BB position already 0-1, momentum_7d normalized
+        rsi_norm = df["rsi_14"] / 100 if "rsi_14" in df.columns else 0.5
+        bb_pos = df["bb_position"] if "bb_position" in df.columns else 0.5
+        mom_7d = df["momentum_7d"] if "momentum_7d" in df.columns else 0.0
+        # Clip momentum to reasonable range and normalize
+        mom_norm = (mom_7d.clip(-0.2, 0.2) + 0.2) / 0.4  # Maps [-0.2, 0.2] -> [0, 1]
+        df["overextension_score"] = (rsi_norm + bb_pos + mom_norm) / 3
 
         return df
 

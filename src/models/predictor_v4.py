@@ -75,6 +75,10 @@ class TradingPredictorV4:
         self._cached_external = None
         self._cached_regime = None
 
+        # Per-ticker probability history for z-score normalization
+        self._prob_history: Dict[str, list] = {}
+        self._PROB_HISTORY_SIZE = 50
+
         logger.info(
             f"TradingPredictorV4 initialized — Default threshold: {self.threshold}, "
             f"Dynamic profiles: {len(self.risk_profiles)} tickers"
@@ -161,29 +165,54 @@ class TradingPredictorV4:
         """Get dynamic threshold for a specific ticker (high confidence level)"""
         return self._get_ticker_profile(ticker)["threshold"]
 
-    def _classify_confidence(self, probability: float, profile: Dict) -> str:
+    def _update_prob_history(self, ticker: str, prob: float):
+        """Track per-ticker probability for z-score normalization."""
+        if ticker not in self._prob_history:
+            self._prob_history[ticker] = []
+        self._prob_history[ticker].append(prob)
+        if len(self._prob_history[ticker]) > self._PROB_HISTORY_SIZE:
+            self._prob_history[ticker].pop(0)
+
+    def _get_prob_zscore(self, ticker: str, prob: float) -> Optional[float]:
+        """Get z-score of probability vs this ticker's history. None if not enough data."""
+        history = self._prob_history.get(ticker, [])
+        if len(history) < 10:
+            return None
+        mean = np.mean(history)
+        std = np.std(history)
+        if std < 0.001:
+            return None
+        return (prob - mean) / std
+
+    def _classify_confidence(self, probability: float, profile: Dict, ticker: str = "") -> str:
         """
-        Band-pass confidence filter.
+        Band-pass confidence filter with z-score enhancement.
         threshold = CEILING (reject overfit signals above this)
         threshold_medium = FLOOR (minimum to enter)
+        Z-score >= 1.5 sigma → "high" confidence (significantly above normal for this coin)
 
-        Returns: "medium" (in band), or "none" (outside band)
+        Returns: "high", "medium", or "none"
         """
         ceiling = profile["threshold"]  # 0.42 — reject above
         floor = profile.get("threshold_medium", profile["threshold"])  # 0.28
 
         if probability >= ceiling:
-            # REJECT: model overfit zone (0% WR in audit data)
-            return "none"
-        elif probability >= floor:
-            # SWEET SPOT: band-pass zone (94.7% WR in 0.30-0.35 range)
+            return "none"  # REJECT overfit zone
+
+        if probability >= floor:
+            # Check z-score for high confidence upgrade
+            if ticker:
+                zscore = self._get_prob_zscore(ticker, probability)
+                if zscore is not None and zscore >= 1.5:
+                    return "high"
             return "medium"
+
         return "none"
 
     def get_signal_confidence(self, ticker: str, probability: float) -> str:
         """Public method to get confidence level for a ticker/probability."""
         profile = self._get_ticker_profile(ticker)
-        return self._classify_confidence(probability, profile)
+        return self._classify_confidence(probability, profile, ticker)
 
     async def _fetch_external_data(self) -> Dict[str, Dict]:
         """Fetch all external data sources concurrently"""
