@@ -23,10 +23,48 @@ class BinanceDataService:
     """
 
     def __init__(self):
-        """Initialize Binance client for public data only"""
-        # Cliente sin autenticación (solo datos públicos)
-        self.client = Client("", "")  # Empty keys for public endpoints
+        """Initialize Binance client for public data only (lazy — no ping)"""
+        self._client = None
         logger.info("📊 Binance Data Service initialized (production, read-only)")
+
+    @property
+    def client(self):
+        """Lazy init: create client on first use, skip ping to avoid IP ban on startup"""
+        if self._client is None:
+            import requests
+            # Create client without the automatic ping()
+            c = Client.__new__(Client)
+            c.API_KEY = ""
+            c.API_SECRET = ""
+            c.session = c._init_session()
+            c.timestamp_offset = 0
+            c.API_URL = "https://api.binance.com/api"
+            c.MARGIN_API_URL = "https://api.binance.com/sapi"
+            c.WEBSITE_URL = "https://www.binance.com"
+            c.FUTURES_URL = "https://fapi.binance.com/fapi"
+            c.FUTURES_DATA_URL = "https://fapi.binance.com/futures/data"
+            c.FUTURES_COIN_URL = "https://dapi.binance.com/dapi"
+            c.FUTURES_COIN_DATA_URL = "https://dapi.binance.com/futures/data"
+            c.OPTIONS_URL = "https://vapi.binance.com/vapi"
+            c.OPTIONS_TESTNET_URL = "https://testnet.binanceops.com/vapi"
+            c.PRIVATE_API_VERSION = "v3"
+            c.PUBLIC_API_VERSION = "v3"
+            c.MARGIN_API_VERSION = "v1"
+            c.FUTURES_API_VERSION = "v1"
+            c.FUTURES_API_VERSION2 = "v2"
+            c.OPTIONS_API_VERSION = "v1"
+            c.response = None
+            c.testnet = False
+            c.tld = "com"
+            self._client = c
+        return self._client
+
+    def _init_session(self):
+        """Fallback if client needs session init"""
+        import requests
+        session = requests.Session()
+        session.headers.update({"Accept": "application/json", "User-Agent": "Mozilla/5.0"})
+        return session
 
     def get_historical_klines(
         self,
