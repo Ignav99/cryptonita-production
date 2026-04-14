@@ -281,15 +281,18 @@ class AutoTrainer:
                     if prob < lowest_threshold:
                         continue
 
-                    # Classify confidence level
-                    if prob >= profile["threshold"]:
-                        confidence = "high"
-                    elif prob >= profile.get("threshold_medium", profile["threshold"]):
+                    # Band-pass ceiling: reject overfit signals above threshold
+                    ceiling = profile["threshold"]
+                    if prob >= ceiling:
+                        continue
+
+                    # Classify confidence level (within accepted band)
+                    if prob >= profile.get("threshold_medium", ceiling):
                         confidence = "medium"
                     else:
-                        confidence = "exploratory"
+                        confidence = "medium"  # floor == threshold_medium when exploratory disabled
 
-                    conf_config = settings.CONFIDENCE_LEVELS.get(confidence, settings.CONFIDENCE_LEVELS["exploratory"])
+                    conf_config = settings.CONFIDENCE_LEVELS.get(confidence, settings.CONFIDENCE_LEVELS["medium"])
                     position_mult = conf_config.get("position_mult", 0.25)
 
                     entry = closes[i]
@@ -343,11 +346,11 @@ class AutoTrainer:
         pnl_arr = np.array(pnl_series)
         sharpe = float(np.mean(pnl_arr) / (np.std(pnl_arr) + 1e-9) * np.sqrt(252))
 
-        # Max drawdown
-        cumulative = np.cumsum(pnl_arr)
-        running_max = np.maximum.accumulate(cumulative)
-        drawdown = running_max - cumulative
-        max_drawdown = float(np.max(drawdown)) if len(drawdown) > 0 else 0
+        # Max drawdown (as percentage of peak equity)
+        equity = 1.0 + np.cumsum(pnl_arr)  # Start with $1 of equity
+        running_max = np.maximum.accumulate(equity)
+        drawdown_pct = (running_max - equity) / np.maximum(running_max, 1e-9)
+        max_drawdown = float(np.max(drawdown_pct)) if len(drawdown_pct) > 0 else 0
 
         result = {
             "roi": float(roi),
