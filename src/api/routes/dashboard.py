@@ -317,14 +317,19 @@ async def get_recent_trades(
         trades_df = db.get_recent_trades(limit=limit)
         if trades_df.empty:
             return []
-        # Convert Decimal/numeric types to Python native (Pydantic compat)
-        for col in trades_df.select_dtypes(include=['object']).columns:
-            trades_df[col] = trades_df[col].where(trades_df[col].notna(), None)
-        for col in trades_df.select_dtypes(include=['number']).columns:
-            trades_df[col] = pd.to_numeric(trades_df[col], errors='coerce')
+        # Convert ALL Decimal/numeric to Python native (PostgreSQL NUMERIC → Decimal → object dtype)
+        numeric_cols = ['quantity', 'price', 'total_value', 'probability']
+        for col in numeric_cols:
+            if col in trades_df.columns:
+                trades_df[col] = trades_df[col].apply(lambda x: float(x) if x is not None and pd.notna(x) else None)
         trades_df = trades_df.where(trades_df.notna(), None)
-        trades = trades_df.to_dict('records')
-        return [Trade(**trade) for trade in trades]
+        results = []
+        for trade in trades_df.to_dict('records'):
+            try:
+                results.append(Trade(**trade))
+            except Exception as ve:
+                logger.warning(f"⚠️ Skipping trade {trade.get('id')}: {ve}")
+        return results
     except Exception as e:
         logger.error(f"❌ /trades error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
