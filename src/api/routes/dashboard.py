@@ -405,6 +405,49 @@ async def backfill_performance(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/review-reports")
+async def get_review_reports(
+    limit: int = 10,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get 15-day review reports"""
+    try:
+        # Check if table exists
+        check_query = """
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables
+            WHERE table_name = 'review_reports'
+        ) as exists
+        """
+        exists_df = db.execute_query(check_query)
+        if not exists_df.iloc[0]['exists']:
+            return []
+
+        query = """
+        SELECT id, period, report_data, created_at
+        FROM review_reports
+        ORDER BY created_at DESC
+        LIMIT :limit
+        """
+        df = db.execute_query(query, {'limit': limit})
+        if df.empty:
+            return []
+
+        records = []
+        for _, row in df.iterrows():
+            record = {
+                'id': int(row['id']),
+                'period': str(row['period']),
+                'report_data': row['report_data'] if isinstance(row['report_data'], dict) else {},
+                'created_at': row['created_at'].isoformat() if hasattr(row['created_at'], 'isoformat') else str(row['created_at']),
+            }
+            records.append(record)
+        return records
+    except Exception as e:
+        logger.error(f"❌ /review-reports error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/portfolio-value", response_model=Dict)
 async def get_portfolio_value(current_user: dict = Depends(get_current_user)):
     """

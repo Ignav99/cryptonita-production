@@ -130,6 +130,16 @@ export const dashboard = {
     const response = await apiClient.get('/dashboard/signals/thresholds');
     return response.data;
   },
+
+  getReviewReports: async (limit = 10) => {
+    const response = await apiClient.get(`/dashboard/review-reports?limit=${limit}`);
+    return response.data;
+  },
+
+  backfillPerformance: async () => {
+    const response = await apiClient.post('/dashboard/backfill-performance');
+    return response.data;
+  },
 };
 
 // Controls API

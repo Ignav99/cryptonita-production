@@ -158,9 +158,15 @@ async def startup_event():
     if settings.ENVIRONMENT == "production":
         asyncio.create_task(_keep_alive_loop())
 
+    # Backfill performance metrics if table is empty (one-time on first deploy)
+    asyncio.create_task(_backfill_performance_if_empty())
+
     # Auto-start bot and launch watchdog
     asyncio.create_task(_auto_start_bot())
     asyncio.create_task(_bot_watchdog_loop())
+
+    # 15-day automated review cycle
+    asyncio.create_task(_review_cycle_loop())
 
 
 async def _keep_alive_loop():
@@ -250,6 +256,200 @@ async def _bot_watchdog_loop():
             logger.error(f"Watchdog error: {e}")
 
         await asyncio.sleep(300)  # Check every 5 minutes
+
+
+async def _backfill_performance_if_empty():
+    """Backfill performance_metrics table if empty (runs once on startup)."""
+    import asyncio
+    await asyncio.sleep(5)  # Wait for DB to be ready
+    try:
+        db = DatabaseManager(settings.get_database_url())
+        existing = db.get_latest_performance()
+        if existing is None:
+            logger.info("📊 Performance metrics empty — running backfill...")
+            count = db.backfill_performance_metrics()
+            logger.success(f"📊 Backfilled {count} days of performance metrics")
+        else:
+            logger.info("📊 Performance metrics already populated, skipping backfill")
+        db.close()
+    except Exception as e:
+        logger.warning(f"⚠️ Performance backfill failed: {e}")
+
+
+async def _review_cycle_loop():
+    """Automated 15-day review cycle — generates performance report and stores in DB."""
+    import asyncio
+    from datetime import datetime, timedelta
+
+    await asyncio.sleep(300)  # Wait 5 min after startup
+
+    REVIEW_INTERVAL_DAYS = 15
+    REVIEW_INTERVAL_SECONDS = REVIEW_INTERVAL_DAYS * 24 * 3600
+
+    while True:
+        try:
+            db = DatabaseManager(settings.get_database_url())
+            report = _generate_review_report(db)
+            db.close()
+
+            # Log the full report
+            logger.info("=" * 60)
+            logger.info("📋 15-DAY AUTOMATED REVIEW REPORT")
+            logger.info("=" * 60)
+            for key, value in report.items():
+                logger.info(f"  {key}: {value}")
+            logger.info("=" * 60)
+
+            # Save report to DB
+            try:
+                db2 = DatabaseManager(settings.get_database_url())
+                _save_review_report(db2, report)
+                db2.close()
+            except Exception as save_err:
+                logger.warning(f"⚠️ Could not save review report: {save_err}")
+
+        except Exception as e:
+            logger.error(f"❌ Review cycle error: {e}")
+
+        await asyncio.sleep(REVIEW_INTERVAL_SECONDS)
+
+
+def _generate_review_report(db: DatabaseManager) -> dict:
+    """Generate a comprehensive 15-day performance review."""
+    from datetime import datetime, timedelta
+    import pandas as pd
+
+    now = datetime.utcnow()
+    period_start = now - timedelta(days=15)
+
+    # Trades in period
+    trades_query = """
+    SELECT * FROM trades
+    WHERE status = 'executed' AND timestamp >= :start
+    ORDER BY timestamp
+    """
+    trades_df = db.execute_query(trades_query, {'start': period_start})
+
+    total_trades = len(trades_df) if not trades_df.empty else 0
+    buys = len(trades_df[trades_df['action'] == 'BUY']) if not trades_df.empty else 0
+    sells = len(trades_df[trades_df['action'] == 'SELL']) if not trades_df.empty else 0
+
+    # Volume
+    volume = 0.0
+    if not trades_df.empty and 'total_value' in trades_df.columns:
+        volume = float(trades_df['total_value'].astype(float).abs().sum())
+
+    # Closed P&L in period
+    pnl_query = """
+    SELECT COALESCE(SUM(
+        (s.price - b.price) * LEAST(b.quantity, s.quantity)
+    ), 0) as pnl,
+    COUNT(*) as closed_count,
+    COUNT(CASE WHEN (s.price - b.price) > 0 THEN 1 END) as wins
+    FROM trades b
+    INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
+    WHERE b.action = 'BUY' AND b.status = 'executed'
+      AND s.action = 'SELL' AND s.status = 'executed'
+      AND s.timestamp >= :start
+    """
+    pnl_df = db.execute_query(pnl_query, {'start': period_start})
+
+    realized_pnl = float(pnl_df.iloc[0]['pnl']) if not pnl_df.empty else 0.0
+    closed_count = int(pnl_df.iloc[0]['closed_count']) if not pnl_df.empty else 0
+    wins = int(pnl_df.iloc[0]['wins']) if not pnl_df.empty else 0
+    win_rate = (wins / closed_count * 100) if closed_count > 0 else 0.0
+
+    # Current positions
+    positions_query = "SELECT COUNT(*) as cnt, COALESCE(SUM(total_value), 0) as val, COALESCE(SUM(pnl), 0) as pnl FROM positions WHERE remaining_quantity > 0.0001"
+    pos_df = db.execute_query(positions_query)
+    open_positions = int(pos_df.iloc[0]['cnt']) if not pos_df.empty else 0
+    positions_value = float(pos_df.iloc[0]['val']) if not pos_df.empty else 0.0
+    unrealized_pnl = float(pos_df.iloc[0]['pnl']) if not pos_df.empty else 0.0
+
+    # Portfolio value
+    portfolio = db.get_portfolio()
+    portfolio_value = float(portfolio.get('total_value', 0)) if portfolio else 0.0
+    initial_capital = float(portfolio.get('initial_capital', 10000)) if portfolio else 10000.0
+
+    # ROI
+    total_pnl = realized_pnl + unrealized_pnl
+    roi_pct = (total_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
+
+    # Signals in period
+    signals_query = """
+    SELECT COUNT(*) as total,
+           COUNT(CASE WHEN signal_type = 'BUY' THEN 1 END) as buy_signals
+    FROM signals WHERE timestamp >= :start
+    """
+    sig_df = db.execute_query(signals_query, {'start': period_start})
+    total_signals = int(sig_df.iloc[0]['total']) if not sig_df.empty else 0
+    buy_signals = int(sig_df.iloc[0]['buy_signals']) if not sig_df.empty else 0
+
+    # Best and worst trades
+    best_worst_query = """
+    SELECT b.ticker,
+           (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl,
+           ((s.price - b.price) / NULLIF(b.price, 0)) * 100 as pnl_pct
+    FROM trades b
+    INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
+    WHERE b.action = 'BUY' AND b.status = 'executed'
+      AND s.action = 'SELL' AND s.status = 'executed'
+      AND s.timestamp >= :start
+    ORDER BY pnl DESC
+    """
+    bw_df = db.execute_query(best_worst_query, {'start': period_start})
+
+    best_trade = "N/A"
+    worst_trade = "N/A"
+    if not bw_df.empty:
+        best_row = bw_df.iloc[0]
+        best_trade = f"{best_row['ticker']} (+${float(best_row['pnl']):.2f}, {float(best_row['pnl_pct']):.1f}%)"
+        worst_row = bw_df.iloc[-1]
+        worst_trade = f"{worst_row['ticker']} (${float(worst_row['pnl']):.2f}, {float(worst_row['pnl_pct']):.1f}%)"
+
+    return {
+        "period": f"{period_start.strftime('%Y-%m-%d')} to {now.strftime('%Y-%m-%d')}",
+        "total_trades": total_trades,
+        "buys": buys,
+        "sells": sells,
+        "closed_trades": closed_count,
+        "win_rate": f"{win_rate:.1f}%",
+        "realized_pnl": f"${realized_pnl:.2f}",
+        "unrealized_pnl": f"${unrealized_pnl:.2f}",
+        "total_pnl": f"${total_pnl:.2f}",
+        "roi": f"{roi_pct:.2f}%",
+        "volume": f"${volume:.2f}",
+        "open_positions": open_positions,
+        "positions_value": f"${positions_value:.2f}",
+        "portfolio_value": f"${portfolio_value:.2f}",
+        "total_signals": total_signals,
+        "buy_signals": buy_signals,
+        "best_trade": best_trade,
+        "worst_trade": worst_trade,
+        "timestamp": now.isoformat(),
+    }
+
+
+def _save_review_report(db: DatabaseManager, report: dict):
+    """Save review report to a review_reports table (creates if not exists)."""
+    import json
+    create_query = """
+    CREATE TABLE IF NOT EXISTS review_reports (
+        id SERIAL PRIMARY KEY,
+        period VARCHAR(100),
+        report_data JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """
+    db.execute_insert(create_query, {})
+    insert_query = """
+    INSERT INTO review_reports (period, report_data)
+    VALUES (:period, :report_data)
+    """
+    db.execute_insert(insert_query, {
+        'period': report['period'],
+        'report_data': json.dumps(report),
+    })
 
 
 @app.on_event("shutdown")
