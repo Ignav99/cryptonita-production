@@ -316,6 +316,18 @@ class TradingBot:
                 # Run market scan
                 await self._scan_market()
 
+                # Snapshot daily performance metrics for equity curve
+                try:
+                    balance = self.binance.get_account_balance()
+                    usdt = float(balance.get('USDT', {}).get('free', 0)) + float(balance.get('USDT', {}).get('locked', 0))
+                    positions_df = self.db.get_positions()
+                    pos_value = float(positions_df['total_value'].sum()) if not positions_df.empty and 'total_value' in positions_df.columns else 0.0
+                    portfolio_value = usdt + pos_value
+                    self.db.snapshot_daily_performance(portfolio_value)
+                    logger.info(f"📊 Daily performance snapshot saved (portfolio: ${portfolio_value:.2f})")
+                except Exception as snap_err:
+                    logger.warning(f"⚠️ Performance snapshot failed: {snap_err}")
+
                 # Wait for next scan interval
                 wait_seconds = self.scan_interval_hours * 3600
                 logger.info(f"⏰ Next scan in {self.scan_interval_hours} hours...")

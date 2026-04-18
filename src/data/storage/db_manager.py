@@ -694,6 +694,182 @@ class DatabaseManager:
             return result.iloc[0].to_dict()
         return None
 
+    def save_performance_metric(self, metric: Dict[str, Any]) -> bool:
+        """Save or update a daily performance metric (UPSERT by date)"""
+        query = """
+        INSERT INTO performance_metrics
+        (date, total_trades, successful_trades, failed_trades, total_volume,
+         total_pnl, win_rate, sharpe_ratio, max_drawdown, portfolio_value, timestamp)
+        VALUES (:date, :total_trades, :successful_trades, :failed_trades, :total_volume,
+                :total_pnl, :win_rate, :sharpe_ratio, :max_drawdown, :portfolio_value, NOW())
+        ON CONFLICT (date) DO UPDATE SET
+            total_trades = EXCLUDED.total_trades,
+            successful_trades = EXCLUDED.successful_trades,
+            failed_trades = EXCLUDED.failed_trades,
+            total_volume = EXCLUDED.total_volume,
+            total_pnl = EXCLUDED.total_pnl,
+            win_rate = EXCLUDED.win_rate,
+            sharpe_ratio = EXCLUDED.sharpe_ratio,
+            max_drawdown = EXCLUDED.max_drawdown,
+            portfolio_value = EXCLUDED.portfolio_value,
+            timestamp = NOW()
+        """
+        try:
+            self.execute_insert(query, metric)
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to save performance metric: {e}")
+            return False
+
+    def backfill_performance_metrics(self, initial_capital: float = 10000.0) -> int:
+        """
+        Backfill performance_metrics from historical trades.
+        Returns the number of days backfilled.
+        """
+        try:
+            # Get all trade dates
+            dates_query = """
+            SELECT DISTINCT DATE(timestamp) as trade_date
+            FROM trades WHERE status = 'executed'
+            ORDER BY trade_date ASC
+            """
+            dates_df = self.execute_query(dates_query)
+            if dates_df.empty:
+                return 0
+
+            count = 0
+            cumulative_pnl = 0.0
+
+            for _, row in dates_df.iterrows():
+                trade_date = row['trade_date']
+
+                # Day's trades
+                day_query = """
+                SELECT action, COUNT(*) as cnt, COALESCE(SUM(ABS(total_value)), 0) as vol
+                FROM trades
+                WHERE DATE(timestamp) = :dt AND status = 'executed'
+                GROUP BY action
+                """
+                day_df = self.execute_query(day_query, {'dt': trade_date})
+                total_trades = int(day_df['cnt'].sum()) if not day_df.empty else 0
+                total_volume = float(day_df['vol'].sum()) if not day_df.empty else 0.0
+
+                # Closed trades (SELLs) that day with P&L
+                closed_query = """
+                SELECT
+                    (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl
+                FROM trades s
+                INNER JOIN trades b ON b.ticker = s.ticker
+                    AND b.action = 'BUY' AND b.status = 'executed'
+                    AND b.timestamp < s.timestamp
+                WHERE s.action = 'SELL' AND s.status = 'executed'
+                  AND DATE(s.timestamp) = :dt
+                """
+                closed_df = self.execute_query(closed_query, {'dt': trade_date})
+
+                if not closed_df.empty and not closed_df['pnl'].isna().all():
+                    pnls = closed_df['pnl'].dropna().astype(float)
+                    day_pnl = float(pnls.sum())
+                    successful = int((pnls > 0).sum())
+                    failed = int((pnls <= 0).sum())
+                    win_rate = (successful / len(pnls) * 100) if len(pnls) > 0 else 0.0
+                else:
+                    day_pnl = 0.0
+                    successful = 0
+                    failed = 0
+                    win_rate = 0.0
+
+                cumulative_pnl += day_pnl
+                portfolio_value = initial_capital + cumulative_pnl
+
+                metric = {
+                    'date': trade_date,
+                    'total_trades': total_trades,
+                    'successful_trades': successful,
+                    'failed_trades': failed,
+                    'total_volume': round(total_volume, 2),
+                    'total_pnl': round(cumulative_pnl, 2),
+                    'win_rate': round(win_rate, 2),
+                    'sharpe_ratio': None,
+                    'max_drawdown': None,
+                    'portfolio_value': round(portfolio_value, 2),
+                }
+                if self.save_performance_metric(metric):
+                    count += 1
+
+            logger.info(f"✅ Backfilled {count} days of performance metrics")
+            return count
+        except Exception as e:
+            logger.error(f"❌ Backfill failed: {e}")
+            return 0
+
+    def snapshot_daily_performance(self, portfolio_value: float, initial_capital: float = 10000.0) -> bool:
+        """
+        Snapshot today's performance metrics. Called from bot after each scan cycle.
+        """
+        try:
+            today = date.today()
+
+            # Today's trades
+            day_query = """
+            SELECT COUNT(*) as total,
+                   COALESCE(SUM(ABS(total_value)), 0) as volume
+            FROM trades
+            WHERE DATE(timestamp) = :dt AND status = 'executed'
+            """
+            day_df = self.execute_query(day_query, {'dt': today})
+            total_trades = int(day_df.iloc[0]['total']) if not day_df.empty else 0
+            total_volume = float(day_df.iloc[0]['volume']) if not day_df.empty else 0.0
+
+            # Cumulative realized P&L
+            pnl_query = """
+            SELECT COALESCE(SUM(
+                (s.price - b.price) * LEAST(b.quantity, s.quantity)
+            ), 0) as realized_pnl
+            FROM trades b
+            INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
+            WHERE b.action = 'BUY' AND b.status = 'executed'
+              AND s.action = 'SELL' AND s.status = 'executed'
+            """
+            pnl_result = self.execute_query(pnl_query).iloc[0]['realized_pnl']
+            total_pnl = float(pnl_result) if pnl_result is not None else 0.0
+
+            # Win rate from all closed trades
+            wr_query = """
+            WITH closed AS (
+                SELECT (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl
+                FROM trades b
+                INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
+                WHERE b.action = 'BUY' AND b.status = 'executed'
+                  AND s.action = 'SELL' AND s.status = 'executed'
+            )
+            SELECT
+                COUNT(CASE WHEN pnl > 0 THEN 1 END) as wins,
+                COUNT(*) as total
+            FROM closed
+            """
+            wr_df = self.execute_query(wr_query)
+            wins = int(wr_df.iloc[0]['wins']) if not wr_df.empty else 0
+            total_closed = int(wr_df.iloc[0]['total']) if not wr_df.empty else 0
+            win_rate = (wins / total_closed * 100) if total_closed > 0 else 0.0
+
+            metric = {
+                'date': today,
+                'total_trades': total_trades,
+                'successful_trades': wins,
+                'failed_trades': total_closed - wins,
+                'total_volume': round(total_volume, 2),
+                'total_pnl': round(total_pnl, 2),
+                'win_rate': round(win_rate, 2),
+                'sharpe_ratio': None,
+                'max_drawdown': None,
+                'portfolio_value': round(portfolio_value, 2),
+            }
+            return self.save_performance_metric(metric)
+        except Exception as e:
+            logger.error(f"❌ Failed to snapshot daily performance: {e}")
+            return False
+
     # ============================================
     # STATISTICS
     # ============================================

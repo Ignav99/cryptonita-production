@@ -31,7 +31,7 @@ export default function EquityCurve({ data }) {
       : point.timestamp
       ? format(new Date(point.timestamp), 'MMM dd')
       : '',
-    value: Number(point.balance ?? point.equity ?? point.value ?? 0),
+    value: Number(point.portfolio_value ?? point.balance ?? point.equity ?? point.value ?? 0),
   }));
 
   return (

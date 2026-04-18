@@ -358,26 +358,50 @@ async def get_bot_status(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/performance", response_model=List[PerformanceMetric])
+@router.get("/performance")
 async def get_performance_metrics(
     days: int = 30,
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Get performance metrics for last N days
+    Get performance metrics for last N days — raw dicts to avoid Decimal issues
     """
     try:
         start_date = (datetime.now() - timedelta(days=days)).date()
         metrics_df = db.get_performance_metrics(start_date=start_date, limit=days)
-        metrics = metrics_df.to_dict('records')
-
-        # Convert date to string
-        for metric in metrics:
-            if 'date' in metric and hasattr(metric['date'], 'isoformat'):
-                metric['date'] = metric['date'].isoformat()
-
-        return [PerformanceMetric(**metric) for metric in metrics]
+        if metrics_df.empty:
+            return []
+        records = []
+        for _, row in metrics_df.iterrows():
+            record = {}
+            for col in metrics_df.columns:
+                val = row[col]
+                if val is None or (isinstance(val, float) and pd.isna(val)):
+                    record[col] = None
+                elif hasattr(val, 'isoformat'):
+                    record[col] = val.isoformat()
+                elif isinstance(val, (int, float, str, bool)):
+                    record[col] = val
+                else:
+                    try:
+                        record[col] = float(val)
+                    except (ValueError, TypeError):
+                        record[col] = str(val)
+            records.append(record)
+        return records
     except Exception as e:
+        logger.error(f"❌ /performance error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/backfill-performance")
+async def backfill_performance(current_user: dict = Depends(get_current_user)):
+    """Backfill performance_metrics from historical trades"""
+    try:
+        count = db.backfill_performance_metrics()
+        return {"status": "ok", "days_backfilled": count}
+    except Exception as e:
+        logger.error(f"❌ /backfill-performance error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
