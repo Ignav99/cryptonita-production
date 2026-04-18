@@ -53,7 +53,7 @@ class Signal(BaseModel):
 
 class Trade(BaseModel):
     id: int
-    signal_id: Optional[int]
+    signal_id: Optional[int] = None
     ticker: str
     action: str
     quantity: float
@@ -61,8 +61,10 @@ class Trade(BaseModel):
     total_value: float
     status: str
     timestamp: datetime
-    executed_at: Optional[datetime]
-    error_message: Optional[str]
+    probability: Optional[float] = None
+    exit_reason: Optional[str] = None
+    executed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
 
 
 class BotStatus(BaseModel):

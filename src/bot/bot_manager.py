@@ -27,9 +27,22 @@ class BotManager:
         self.pid_file = Path(pid_file)
         self.bot_script = Path(__file__).parent.parent.parent / "run_bot.py"
 
+    def _is_bot_process(self, pid: int) -> bool:
+        """
+        Verify a PID is actually our bot process (not a reused PID).
+        Checks the command line contains 'run_bot.py'.
+        """
+        try:
+            proc = psutil.Process(pid)
+            cmdline = " ".join(proc.cmdline())
+            return "run_bot" in cmdline
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            return False
+
     def is_running(self) -> bool:
         """
-        Check if bot is currently running
+        Check if bot is currently running.
+        Validates that the PID actually belongs to our bot process.
 
         Returns:
             True if bot process is running
@@ -39,13 +52,18 @@ class BotManager:
 
         try:
             pid = int(self.pid_file.read_text().strip())
-            return psutil.pid_exists(pid)
+            if psutil.pid_exists(pid) and self._is_bot_process(pid):
+                return True
+            # PID doesn't exist or was reused by another process — clean stale PID file
+            logger.warning(f"Stale PID file (pid={pid}), removing")
+            self.pid_file.unlink(missing_ok=True)
+            return False
         except (ValueError, FileNotFoundError):
             return False
 
     def get_pid(self) -> Optional[int]:
         """
-        Get bot process ID
+        Get bot process ID (only if it's actually our bot)
 
         Returns:
             Process ID or None if not running
@@ -55,7 +73,7 @@ class BotManager:
 
         try:
             pid = int(self.pid_file.read_text().strip())
-            if psutil.pid_exists(pid):
+            if psutil.pid_exists(pid) and self._is_bot_process(pid):
                 return pid
             return None
         except (ValueError, FileNotFoundError):
