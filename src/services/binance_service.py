@@ -698,6 +698,36 @@ class BinanceService:
             logger.error(f"❌ Failed to get symbol info for {symbol}: {e}")
             return None
 
+    def is_dust_position(self, symbol: str, quantity: float, current_price: float = 0) -> bool:
+        """
+        Check if a position is too small to sell (dust).
+        Returns True if quantity is below LOT_SIZE minQty or below min notional.
+        """
+        if quantity <= 0:
+            return True
+        try:
+            info = self.get_symbol_info(symbol)
+            if not info:
+                return quantity < 1e-6  # Fallback: treat sub-micro as dust
+
+            filters = {f['filterType']: f for f in info['filters']}
+
+            # Check LOT_SIZE minimum
+            lot = filters.get('LOT_SIZE', {})
+            min_qty = float(lot.get('minQty', 0))
+            if quantity < min_qty:
+                return True
+
+            # Check NOTIONAL minimum (min USD value, typically $5-10)
+            notional = filters.get('NOTIONAL', filters.get('MIN_NOTIONAL', {}))
+            min_notional = float(notional.get('minNotional', 5.0))
+            if current_price > 0 and quantity * current_price < min_notional:
+                return True
+
+            return False
+        except Exception:
+            return quantity < 1e-6
+
     def round_quantity(self, symbol: str, quantity: float) -> float:
         """
         Round quantity according to symbol's step size

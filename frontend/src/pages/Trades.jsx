@@ -15,7 +15,7 @@ export default function Trades() {
   });
 
   const totalTrades = trades?.length || 0;
-  const totalVolume = trades?.reduce((sum, t) => sum + (Number(t.total) || Number(t.price) * Number(t.quantity) || 0), 0) || 0;
+  const totalVolume = trades?.reduce((sum, t) => sum + (Number(t.total_value) || Number(t.price) * Number(t.quantity) || 0), 0) || 0;
 
   const columns = [
     {
@@ -47,7 +47,7 @@ export default function Trades() {
       render: (v) => v != null ? `$${Number(v).toLocaleString()}` : '—',
     },
     {
-      key: 'total',
+      key: 'total_value',
       label: 'Total',
       render: (v, row) => {
         const total = v || (row.price && row.quantity ? Number(row.price) * Number(row.quantity) : null);

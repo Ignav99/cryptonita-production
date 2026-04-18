@@ -82,7 +82,7 @@ class TradingBot:
         """Return default configuration"""
         return {
             "trading": {
-                "scan_interval_hours": 12,
+                "scan_interval_hours": 6,
                 "position_monitoring_minutes": 5,  # Reduced from 15: faster SL/TP checks
                 "auto_trading_enabled": True,
                 "require_manual_approval": False
@@ -94,21 +94,36 @@ class TradingBot:
         }
 
     def _load_positions_from_db(self):
-        """Load existing positions from database so bot survives restarts."""
+        """Load existing positions from database so bot survives restarts.
+        Automatically cleans up dust positions (remaining_qty too small to trade)."""
         try:
             positions_df = self.db.get_positions()
             if len(positions_df) == 0:
                 logger.info("No existing positions in DB")
                 return
 
+            dust_cleaned = 0
             for _, pos in positions_df.iterrows():
                 ticker = pos['ticker']
                 entry_price = float(pos['avg_buy_price'])
+                remaining_qty = float(pos.get('remaining_quantity', pos['quantity'])) if pd.notna(pos.get('remaining_quantity')) else float(pos['quantity'])
+                current_price = float(pos['current_price']) if pd.notna(pos.get('current_price')) else entry_price
+
+                # Skip and clean up dust positions (too small to trade)
+                if remaining_qty <= 0 or self.binance.is_dust_position(ticker, abs(remaining_qty), current_price):
+                    logger.warning(f"🧹 Cleaning dust position: {ticker} (remaining: {remaining_qty})")
+                    self.db.execute_command(
+                        "UPDATE positions SET remaining_quantity = 0 WHERE ticker = :ticker",
+                        {'ticker': ticker}
+                    )
+                    dust_cleaned += 1
+                    continue
+
                 self.positions[ticker] = {
                     'quantity': float(pos['quantity']),
-                    'remaining_quantity': float(pos.get('remaining_quantity', pos['quantity'])) if pd.notna(pos.get('remaining_quantity')) else float(pos['quantity']),
+                    'remaining_quantity': remaining_qty,
                     'entry_price': entry_price,
-                    'current_price': float(pos['current_price']) if pd.notna(pos.get('current_price')) else entry_price,
+                    'current_price': current_price,
                     'stop_loss': float(pos['stop_loss']) if pd.notna(pos.get('stop_loss')) else entry_price * (1 - settings.STOP_LOSS_PCT),
                     'tp1': float(pos['tp1']) if pd.notna(pos.get('tp1')) else None,
                     'tp1_hit': bool(pos.get('tp1_hit', False)),
@@ -129,7 +144,9 @@ class TradingBot:
                     'trade_id': int(pos['trade_id']) if pd.notna(pos.get('trade_id')) else None,
                 }
 
-            logger.success(f"✅ Loaded {len(self.positions)} positions from DB")
+            if dust_cleaned > 0:
+                logger.success(f"🧹 Cleaned {dust_cleaned} dust positions from DB")
+            logger.success(f"✅ Loaded {len(self.positions)} active positions from DB")
 
             # Assign emergency SL to positions that had none
             sl_fixed = 0
@@ -1137,6 +1154,16 @@ class TradingBot:
     async def _execute_exit(self, ticker: str, quantity: float, price: float, reason: str):
         """Execute exit (sell) for a position or partial position"""
         try:
+            # Guard: skip dust positions that are too small to trade
+            if self.binance.is_dust_position(ticker, abs(quantity), price):
+                logger.info(f"🧹 Skipping dust sell for {ticker} (qty={quantity:.2e}, ~${abs(quantity)*price:.4f})")
+                # Clean up: mark position as fully exited in DB
+                self.db.execute_command(
+                    "UPDATE positions SET remaining_quantity = 0 WHERE ticker = :ticker",
+                    {'ticker': ticker}
+                )
+                return
+
             logger.info(f"💰 Executing SELL: {quantity} {ticker} @ ${price:.4f}")
 
             # Get entry price for P&L calculation
@@ -1151,6 +1178,15 @@ class TradingBot:
 
             # Round quantity
             quantity = self.binance.round_quantity(ticker, quantity)
+
+            # Final check: rounded quantity could be 0
+            if quantity <= 0:
+                logger.info(f"🧹 Rounded qty is 0 for {ticker}, marking as closed")
+                self.db.execute_command(
+                    "UPDATE positions SET remaining_quantity = 0 WHERE ticker = :ticker",
+                    {'ticker': ticker}
+                )
+                return
 
             # Execute market sell
             order = self.binance.create_market_sell_order(ticker, quantity)

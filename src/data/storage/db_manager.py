@@ -120,14 +120,16 @@ class DatabaseManager:
             df: DataFrame with columns [timestamp, ticker, open, high, low, close, volume]
         """
         try:
-            df.to_sql(
-                'crypto_prices',
-                self.engine,
-                if_exists='append',
-                index=False,
-                method='multi',
-                chunksize=1000
-            )
+            with self.engine.connect() as conn:
+                df.to_sql(
+                    'crypto_prices',
+                    conn,
+                    if_exists='append',
+                    index=False,
+                    method='multi',
+                    chunksize=1000
+                )
+                conn.commit()
             logger.info(f"✅ Saved {len(df)} crypto price records")
         except Exception as e:
             logger.error(f"❌ Failed to save crypto prices: {e}")
@@ -487,9 +489,12 @@ class DatabaseManager:
     # POSITIONS
     # ============================================
 
-    def get_positions(self) -> pd.DataFrame:
-        """Get all current positions"""
-        query = "SELECT * FROM positions ORDER BY total_value DESC"
+    def get_positions(self, include_dust: bool = False) -> pd.DataFrame:
+        """Get current positions. Excludes dust (remaining_qty ~ 0) by default."""
+        if include_dust:
+            query = "SELECT * FROM positions ORDER BY total_value DESC"
+        else:
+            query = "SELECT * FROM positions WHERE remaining_quantity > 0.0001 OR remaining_quantity IS NULL ORDER BY total_value DESC"
         return self.execute_query(query)
 
     def get_position(self, ticker: str) -> Optional[Dict[str, Any]]:
