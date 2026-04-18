@@ -305,31 +305,38 @@ async def get_recent_signals(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/trades", response_model=List[Trade])
+@router.get("/trades")
 async def get_recent_trades(
     limit: int = 50,
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Get recent trades
+    Get recent trades — returns raw dicts to avoid Decimal/Pydantic issues
     """
     try:
         trades_df = db.get_recent_trades(limit=limit)
         if trades_df.empty:
             return []
-        # Convert ALL Decimal/numeric to Python native (PostgreSQL NUMERIC → Decimal → object dtype)
-        numeric_cols = ['quantity', 'price', 'total_value', 'probability']
-        for col in numeric_cols:
-            if col in trades_df.columns:
-                trades_df[col] = trades_df[col].apply(lambda x: float(x) if x is not None and pd.notna(x) else None)
-        trades_df = trades_df.where(trades_df.notna(), None)
-        results = []
-        for trade in trades_df.to_dict('records'):
-            try:
-                results.append(Trade(**trade))
-            except Exception as ve:
-                logger.warning(f"⚠️ Skipping trade {trade.get('id')}: {ve}")
-        return results
+        # Convert every value to JSON-safe Python native types
+        records = []
+        for _, row in trades_df.iterrows():
+            record = {}
+            for col in trades_df.columns:
+                val = row[col]
+                if val is None or (isinstance(val, float) and pd.isna(val)):
+                    record[col] = None
+                elif hasattr(val, 'isoformat'):
+                    record[col] = val.isoformat()
+                elif isinstance(val, (int, float, str, bool)):
+                    record[col] = val
+                else:
+                    # Decimal, numpy types, etc → float or str
+                    try:
+                        record[col] = float(val)
+                    except (ValueError, TypeError):
+                        record[col] = str(val)
+            records.append(record)
+        return records
     except Exception as e:
         logger.error(f"❌ /trades error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
