@@ -126,8 +126,7 @@ class DatabaseManager:
                     conn,
                     if_exists='append',
                     index=False,
-                    method='multi',
-                    chunksize=1000
+                    chunksize=500
                 )
                 conn.commit()
             logger.info(f"✅ Saved {len(df)} crypto price records")
