@@ -154,6 +154,15 @@ async def startup_event():
     logger.info(f"API running on: http://{settings.API_HOST}:{settings.API_PORT}")
     logger.info("=" * 60)
 
+    # Ensure lifecycle schema is up to date
+    try:
+        db = DatabaseManager(settings.get_database_url())
+        db.ensure_lifecycle_schema()
+        db.close()
+        logger.info("Lifecycle schema ensured")
+    except Exception as e:
+        logger.warning(f"Schema upgrade warning: {e}")
+
     # Self-ping to keep Render alive (every 10 minutes)
     if settings.ENVIRONMENT == "production":
         asyncio.create_task(_keep_alive_loop())
@@ -441,12 +450,12 @@ def _save_review_report(db: DatabaseManager, report: dict):
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """
-    db.execute_insert(create_query, {})
+    db.execute_command(create_query)
     insert_query = """
     INSERT INTO review_reports (period, report_data)
     VALUES (:period, :report_data)
     """
-    db.execute_insert(insert_query, {
+    db.execute_command(insert_query, {
         'period': report['period'],
         'report_data': json.dumps(report),
     })

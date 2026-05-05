@@ -24,6 +24,10 @@ from src.data.macro_data import MacroDataFetcher
 from src.trading.dynamic_risk_manager import DynamicRiskManager
 from src.services.telegram_notifier import TelegramNotifier
 from src.models.correlation_engine import CorrelationEngine
+from src.models.hold_time_estimator import HoldTimeEstimator
+from src.trading.position_lifecycle import PositionLifecycleManager
+from src.trading.signal_queue import SignalQueue
+from src.bot.health_monitor import HealthMonitor
 
 
 class TradingBot:
@@ -54,6 +58,12 @@ class TradingBot:
         self.risk_manager = DynamicRiskManager()  # Dynamic TP/SL management
         self.notifier = TelegramNotifier(settings.TELEGRAM_BOT_TOKEN, settings.TELEGRAM_CHAT_ID)
         self.correlation_engine = CorrelationEngine()
+
+        # Position Lifecycle System
+        self.hold_estimator = HoldTimeEstimator()
+        self.lifecycle_manager = PositionLifecycleManager(self.hold_estimator)
+        self.signal_queue = SignalQueue()
+        self.health_monitor = HealthMonitor()
 
         logger.info("💡 Using Binance PRODUCTION for data, TESTNET for trading")
 
@@ -142,6 +152,13 @@ class TradingBot:
                     'tier': 3,
                     'entry_features': {},
                     'trade_id': int(pos['trade_id']) if pd.notna(pos.get('trade_id')) else None,
+                    # Lifecycle fields (loaded from DB)
+                    'lifecycle_state': pos.get('lifecycle_state', 'INCUBATING') if pd.notna(pos.get('lifecycle_state')) else 'INCUBATING',
+                    'predicted_hold_days': float(pos['predicted_hold_days']) if pd.notna(pos.get('predicted_hold_days')) else 7.0,
+                    'expected_max_gain_pct': float(pos['expected_max_gain_pct']) if pd.notna(pos.get('expected_max_gain_pct')) else 0.15,
+                    'last_momentum_3d': float(pos['last_momentum_3d']) if pd.notna(pos.get('last_momentum_3d')) else 0.0,
+                    'exit_cooldowns': pos.get('exit_cooldowns', {}) if pd.notna(pos.get('exit_cooldowns')) else {},
+                    'entry_probability': 0.30,
                 }
 
             if dust_cleaned > 0:
@@ -328,9 +345,15 @@ class TradingBot:
                 except Exception as snap_err:
                     logger.warning(f"⚠️ Performance snapshot failed: {snap_err}")
 
+                # Daily health summary
+                try:
+                    self.health_monitor.daily_summary(self.db, self.positions)
+                except Exception:
+                    pass
+
                 # Wait for next scan interval
                 wait_seconds = self.scan_interval_hours * 3600
-                logger.info(f"⏰ Next scan in {self.scan_interval_hours} hours...")
+                logger.info(f"Next scan in {self.scan_interval_hours} hours...")
 
                 # Sleep in small chunks to allow for shutdown
                 for _ in range(int(wait_seconds / 60)):
@@ -347,8 +370,17 @@ class TradingBot:
         """Scan market for new trading opportunities"""
         self.cycle_number += 1
         logger.info("=" * 60)
-        logger.info(f"🔍 MARKET SCAN - CYCLE #{self.cycle_number}")
+        logger.info(f"MARKET SCAN - CYCLE #{self.cycle_number}")
         logger.info("=" * 60)
+
+        # Health check: trade rate limit
+        if not self.health_monitor.check_trade_rate(self.db):
+            logger.warning("Trade rate limit exceeded, skipping scan")
+            await self.notifier.notify_error("Trade rate limit exceeded", context="Health Monitor")
+            return
+
+        # Check signal queue for deferred signals before scanning
+        await self._process_signal_queue()
 
         try:
             # 1. Get macro data
@@ -488,9 +520,9 @@ class TradingBot:
 
     def _calculate_position_score(self, ticker: str, position: dict) -> float:
         """
-        Score an open position's remaining value.
+        Score an open position's remaining value (v2 — no time decay).
         Lower score = weaker = better rotation candidate.
-        Factors: current PnL, remaining upside, time held, SL buffer.
+        Factors: current PnL (50%), remaining upside (30%), momentum (20%).
         """
         entry_price = position['entry_price']
         current_price = position.get('current_price', entry_price)
@@ -507,32 +539,22 @@ class TradingBot:
         elif not position.get('tp3_hit') and position.get('tp3'):
             remaining_upside = (position['tp3'] - current_price) / current_price
         else:
-            remaining_upside = 0.02  # All TPs hit, small trailing upside
+            remaining_upside = 0.02
         remaining_upside = max(remaining_upside, 0)
 
-        # 3. Time decay — penalize stale capital (linear decay over 5 days)
-        entry_time = position.get('entry_time')
-        if entry_time:
-            if isinstance(entry_time, str):
-                entry_time = datetime.fromisoformat(entry_time)
-            hours_held = (datetime.utcnow() - entry_time).total_seconds() / 3600
-            time_factor = max(0.1, 1 - hours_held / (5 * 24))
-        else:
-            time_factor = 0.5
+        # 3. Momentum (no time decay — age does NOT penalize)
+        momentum = position.get('last_momentum_3d', 0.0)
 
-        # 4. SL buffer — further from SL = safer position
-        stop_loss = position.get('stop_loss', entry_price * 0.95)
-        sl_distance_pct = (current_price - stop_loss) / current_price if current_price > 0 else 0.05
-
-        # Weighted score: PnL(40%) + upside*freshness(40%) + safety(20%)
-        score = pnl_pct * 0.4 + remaining_upside * time_factor * 0.4 + sl_distance_pct * 0.2
+        # Score: PnL(50%) + upside(30%) + momentum(20%)
+        score = pnl_pct * 0.5 + remaining_upside * 0.3 + momentum * 0.2
         return score
 
     async def _attempt_smart_rotation(
         self, new_signal: pd.Series, new_price: float, portfolio_value: float
     ) -> bool:
         """
-        Sell weakest position if new signal has higher EV.
+        Sell weakest ROTATABLE position if new signal has higher EV.
+        Only DECAYING and ZOMBIE positions are eligible for rotation.
         Returns True if a position was sold (freeing capital + slot).
         """
         if not self.positions:
@@ -544,12 +566,24 @@ class TradingBot:
         # Calculate EV of new signal
         new_ev = self._calculate_signal_ev(new_prob, new_ticker)
 
-        # Find weakest position
+        # Filter only rotatable positions (DECAYING, ZOMBIE)
+        rotatable_positions = {
+            t: p for t, p in self.positions.items()
+            if self.lifecycle_manager.is_rotatable(p)
+        }
+
+        if not rotatable_positions:
+            # No rotatable positions -> queue signal instead
+            logger.info(f"Rotation rejected: no rotatable positions for {new_ticker}, queuing signal")
+            self.signal_queue.enqueue(new_ticker, new_prob, new_signal.get('features', {}))
+            return False
+
+        # Find weakest rotatable position
         weakest_ticker = None
         weakest_score = float('inf')
         weakest_pos = None
 
-        for ticker, pos in self.positions.items():
+        for ticker, pos in rotatable_positions.items():
             score = self._calculate_position_score(ticker, pos)
             if score < weakest_score:
                 weakest_score = score
@@ -559,19 +593,24 @@ class TradingBot:
         if weakest_ticker is None:
             return False
 
-        # Decision: new EV must exceed weakest score + rotation cost
-        if new_ev - self.ROTATION_COMMISSION_PCT <= weakest_score:
+        # More exigent threshold: new_ev must be 1.5x weakest + minimum absolute threshold
+        threshold = weakest_score * settings.ROTATION_EV_MULTIPLIER + settings.ROTATION_MIN_THRESHOLD
+        if new_ev <= threshold:
             logger.info(
-                f"📊 Rotation rejected: {new_ticker} EV={new_ev:.4f} vs "
-                f"{weakest_ticker} score={weakest_score:.4f} + cost={self.ROTATION_COMMISSION_PCT}"
+                f"Rotation rejected: {new_ticker} EV={new_ev:.4f} vs "
+                f"{weakest_ticker} threshold={threshold:.4f} (score={weakest_score:.4f} x {settings.ROTATION_EV_MULTIPLIER})"
             )
+            self.signal_queue.enqueue(new_ticker, new_prob, new_signal.get('features', {}))
             return False
 
         # Execute rotation: sell weakest
         logger.info(
-            f"🔄 SMART ROTATION: Selling {weakest_ticker} (score={weakest_score:.4f}) "
+            f"SMART ROTATION: Selling {weakest_ticker} (score={weakest_score:.4f}, state={weakest_pos.get('lifecycle_state', '?')}) "
             f"for {new_ticker} (EV={new_ev:.4f})"
         )
+
+        # Notify lifecycle of close
+        self.lifecycle_manager.on_close(weakest_pos, weakest_ticker)
 
         await self._execute_exit(
             weakest_ticker,
@@ -585,7 +624,7 @@ class TradingBot:
             del self.positions[weakest_ticker]
         self.db.delete_position(weakest_ticker)
 
-        logger.success(f"✅ Rotated out {weakest_ticker} — slot and capital freed for {new_ticker}")
+        logger.success(f"Rotated out {weakest_ticker} -- slot and capital freed for {new_ticker}")
         return True
 
     # ============================================
@@ -648,6 +687,11 @@ class TradingBot:
                 entry_time = datetime.fromisoformat(entry_time)
 
             days_held = (now - entry_time).total_seconds() / 86400
+
+            # Fetch fresh price (fix: was using stale current_price)
+            fresh_price = self.binance.get_current_price(ticker)
+            if fresh_price:
+                pos['current_price'] = fresh_price
             pnl_pct = (pos.get('current_price', pos['entry_price']) - pos['entry_price']) / pos['entry_price']
 
             # Only apply to underwater positions (negative PnL)
@@ -949,7 +993,7 @@ class TradingBot:
         # 10. Update position tracking with dynamic TP/SL data
         self.positions[ticker] = {
             'quantity': executed_qty,
-            'remaining_quantity': executed_qty,  # Track remaining after partial exits
+            'remaining_quantity': executed_qty,
             'entry_price': executed_price,
             'current_price': executed_price,
             'stop_loss': tp_sl['stop_loss'],
@@ -968,10 +1012,18 @@ class TradingBot:
             'trailing_atr_mult': tp_sl.get('trailing_atr_mult', 1.5),
             'tier': tp_sl.get('tier', 3),
             'trailing_stop_active': False,
-            'entry_features': signal.get('features', {}),  # Save entry features for comparison
+            'entry_features': signal.get('features', {}),
             'trade_id': trade_id,
-            'entry_time': datetime.utcnow()
+            'entry_time': datetime.utcnow(),
+            'entry_probability': probability,
         }
+
+        # 10b. Initialize lifecycle state
+        self.lifecycle_manager.on_entry(
+            self.positions[ticker], ticker, probability, tp_sl.get('tier', 3)
+        )
+        # Remove ticker from signal queue if it was queued
+        self.signal_queue.remove_ticker(ticker)
 
         logger.success(f"✅ Trade complete: {ticker} position opened with dynamic TP/SL")
 
@@ -1088,6 +1140,19 @@ class TradingBot:
                         position['trailing_stop_active'] = True
                         logger.info(f"Trailing SL {ticker}: ${old_sl:.4f} -> ${new_stop_loss:.4f}")
 
+                # 5b. Update momentum and lifecycle state
+                position['last_momentum_3d'] = current_features.get('momentum_3d', 0.0)
+                lifecycle_state = self.lifecycle_manager.update_state(position, ticker)
+
+                # 5c. Force close zombies past MAX_ZOMBIE_DAYS
+                if self.lifecycle_manager.should_force_close(position):
+                    logger.warning(f"FORCE CLOSE zombie: {ticker}")
+                    self.lifecycle_manager.on_close(position, ticker)
+                    await self._execute_exit(ticker, position['remaining_quantity'], current_price, 'zombie_force_close')
+                    del self.positions[ticker]
+                    self.db.delete_position(ticker)
+                    continue
+
                 exit_decision = self.risk_manager.check_exit_conditions(
                     ticker=ticker,
                     entry_price=position['entry_price'],
@@ -1096,19 +1161,21 @@ class TradingBot:
                     tp_levels=tp_levels,
                     stop_loss=position['stop_loss'],
                     features=current_features,
-                    entry_features=position.get('entry_features', {})
+                    entry_features=position.get('entry_features', {}),
+                    lifecycle_state=lifecycle_state,
                 )
 
                 # 6. Execute exit if needed
                 if exit_decision['action'] == 'exit_full':
-                    logger.warning(f"🚪 {ticker} FULL EXIT: {exit_decision['reason']}")
+                    logger.warning(f"{ticker} FULL EXIT: {exit_decision['reason']}")
+                    self.lifecycle_manager.on_close(position, ticker)
                     await self._execute_exit(ticker, position['remaining_quantity'], current_price, exit_decision['reason'])
                     del self.positions[ticker]
                     continue
 
                 elif exit_decision['action'] == 'exit_partial':
                     exit_qty = position['remaining_quantity'] * exit_decision['quantity']
-                    logger.info(f"📤 {ticker} PARTIAL EXIT: {exit_decision['reason']} ({exit_decision['quantity']*100:.0f}%)")
+                    logger.info(f"{ticker} PARTIAL EXIT: {exit_decision['reason']} ({exit_decision['quantity']*100:.0f}%)")
                     await self._execute_exit(ticker, exit_qty, current_price, exit_decision['reason'])
 
                     position['remaining_quantity'] -= exit_qty
@@ -1118,6 +1185,37 @@ class TradingBot:
                         level_key = f"{exit_decision['level'].lower()}_hit"
                         position[level_key] = True
 
+                elif exit_decision['action'] == 'tighten_trailing':
+                    # Check cooldown before tightening
+                    cooldown_key = exit_decision.get('cooldown_key', exit_decision['reason'])
+                    cooldowns = position.get('exit_cooldowns', {})
+                    last_tighten = cooldowns.get(cooldown_key)
+
+                    can_tighten = True
+                    if last_tighten:
+                        if isinstance(last_tighten, str):
+                            last_tighten = datetime.fromisoformat(last_tighten)
+                        hours_since = (datetime.utcnow() - last_tighten).total_seconds() / 3600
+                        if hours_since < settings.EXIT_COOLDOWN_HOURS:
+                            can_tighten = False
+
+                    if can_tighten:
+                        factor = exit_decision.get('tighten_factor', 0.5)
+                        old_sl = position['stop_loss']
+                        distance = current_price - old_sl
+                        if distance > 0:
+                            new_distance = distance * factor
+                            new_sl = current_price - new_distance
+                            position['stop_loss'] = max(old_sl, new_sl)
+                            # Record cooldown
+                            if 'exit_cooldowns' not in position:
+                                position['exit_cooldowns'] = {}
+                            position['exit_cooldowns'][cooldown_key] = datetime.utcnow().isoformat()
+                            logger.info(
+                                f"Trailing tightened for {ticker}: SL ${old_sl:.4f} -> ${position['stop_loss']:.4f} "
+                                f"(reason={exit_decision['reason']})"
+                            )
+
                 # 7. Check basic TP/SL (in case OCO failed)
                 if current_price <= position['stop_loss']:
                     logger.warning(f"🛑 {ticker} STOP LOSS hit: ${current_price:.2f} <= ${position['stop_loss']:.2f}")
@@ -1125,7 +1223,8 @@ class TradingBot:
                     del self.positions[ticker]
                     continue
 
-                # 8. Sync full position state to database
+                # 8. Sync full position state to database (including lifecycle)
+                import json as _json
                 self.db.execute_command(
                     """
                     UPDATE positions
@@ -1139,6 +1238,10 @@ class TradingBot:
                         tp2_hit = :tp2_hit,
                         tp3_hit = :tp3_hit,
                         trailing_stop_active = :trailing_stop_active,
+                        lifecycle_state = :lifecycle_state,
+                        predicted_hold_days = :predicted_hold_days,
+                        last_momentum_3d = :last_momentum_3d,
+                        exit_cooldowns = :exit_cooldowns,
                         last_update = :last_update
                     WHERE ticker = :ticker
                     """,
@@ -1154,6 +1257,10 @@ class TradingBot:
                         'tp2_hit': position.get('tp2_hit', False),
                         'tp3_hit': position.get('tp3_hit', False),
                         'trailing_stop_active': position.get('trailing_stop_active', False),
+                        'lifecycle_state': position.get('lifecycle_state', 'INCUBATING'),
+                        'predicted_hold_days': position.get('predicted_hold_days', 7.0),
+                        'last_momentum_3d': position.get('last_momentum_3d', 0.0),
+                        'exit_cooldowns': _json.dumps(position.get('exit_cooldowns', {})),
                         'last_update': datetime.utcnow()
                     }
                 )
@@ -1346,35 +1453,94 @@ class TradingBot:
             logger.error(f"❌ Failed to sync with Binance: {e}")
 
     # ============================================
-    # AUTO-TRAINING LOOP (weekly)
+    # SIGNAL QUEUE PROCESSING
+    # ============================================
+
+    async def _process_signal_queue(self):
+        """Process deferred signals from the queue if slots are available."""
+        if not self.signal_queue.has_signals():
+            return
+
+        current_positions = len(self.positions)
+        regime_max = getattr(self, '_regime_max_positions', settings.MAX_POSITIONS)
+
+        if current_positions >= regime_max:
+            return
+
+        # Process up to (available slots) signals
+        available_slots = regime_max - current_positions
+        processed = 0
+
+        while available_slots > 0 and self.signal_queue.has_signals():
+            signal_data = self.signal_queue.dequeue_best()
+            if signal_data is None:
+                break
+
+            ticker = signal_data['ticker']
+            if ticker in self.positions:
+                continue
+
+            # Create a signal-like Series for _execute_trade
+            signal_series = pd.Series({
+                'ticker': ticker,
+                'probability': signal_data['probability'],
+                'features': signal_data.get('features', {}),
+                'signal_type': 'BUY',
+                'prediction': 1,
+            })
+
+            try:
+                await self._execute_trade(signal_series)
+                processed += 1
+                available_slots -= 1
+            except Exception as e:
+                logger.error(f"Failed to execute queued signal {ticker}: {e}")
+
+        if processed > 0:
+            logger.info(f"Queued signal executed: {processed} signals processed from queue")
+
+    # ============================================
+    # AUTO-TRAINING LOOP (weekly, DB-aware)
     # ============================================
 
     async def _auto_training_loop(self):
-        """Periodically retrain V4 model and promote if it outperforms the current one."""
+        """Periodically retrain V4 model. Uses DB to survive restarts."""
         interval_days = getattr(settings, 'AUTO_TRAIN_INTERVAL_DAYS', 7)
-        initial_delay_hours = 1  # Let the bot stabilize before first training
 
-        logger.info(f"Auto-training loop started (interval: {interval_days}d, first run in {initial_delay_hours}h)")
+        logger.info(f"Auto-training loop started (interval: {interval_days}d)")
 
-        # Wait before first training
-        for _ in range(initial_delay_hours * 60):
-            if not self.is_running:
-                return
-            await asyncio.sleep(60)
+        # Wait 5 min warmup
+        await asyncio.sleep(300)
 
         while self.is_running:
             try:
+                # Check DB for last training date (survives restarts)
+                last_trained = self.db.get_last_training_date()
+                if last_trained:
+                    if isinstance(last_trained, str):
+                        last_trained = datetime.fromisoformat(last_trained)
+                    days_since = (datetime.utcnow() - last_trained).total_seconds() / 86400
+                    if days_since < interval_days:
+                        logger.info(f"Auto-training: last trained {days_since:.1f}d ago, next in {interval_days - days_since:.1f}d")
+                        await asyncio.sleep(3600)  # Check again in 1h
+                        continue
+
                 from src.models.auto_trainer import AutoTrainer
                 trainer = AutoTrainer()
 
                 logger.info("Starting auto-training cycle...")
                 result = await trainer.run_auto_training()
 
+                # Log training event to DB
+                self.db.save_training_log(
+                    model_version="V4",
+                    metrics=result
+                )
+
                 if result.get("promoted"):
-                    # Trigger hot-reload on the predictor
                     if hasattr(self.predictor, 'request_reload'):
                         self.predictor.request_reload()
-                        logger.success(f"Model v{result['version']} promoted — predictor will reload on next prediction")
+                        logger.success(f"Model v{result['version']} promoted")
 
                 logger.info(f"Auto-training result: {result.get('status')}")
 
@@ -1383,12 +1549,8 @@ class TradingBot:
                 import traceback
                 logger.error(traceback.format_exc())
 
-            # Wait for next cycle
-            wait_seconds = interval_days * 24 * 3600
-            for _ in range(int(wait_seconds / 60)):
-                if not self.is_running:
-                    return
-                await asyncio.sleep(60)
+            # Wait before next check
+            await asyncio.sleep(3600)
 
     # ============================================
     # UTILITIES

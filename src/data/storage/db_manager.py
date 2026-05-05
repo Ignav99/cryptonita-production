@@ -86,6 +86,22 @@ class DatabaseManager:
             logger.error(f"❌ Failed to execute command: {e}")
             raise
 
+    def execute_insert(self, query: str, params: Optional[Dict] = None) -> Optional[int]:
+        """
+        Execute an INSERT/DDL command, optionally returning an ID via RETURNING.
+        """
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(text(query), params or {})
+                conn.commit()
+                if result.returns_rows:
+                    row = result.fetchone()
+                    return row[0] if row else None
+                return None
+        except Exception as e:
+            logger.error(f"❌ Failed to execute insert: {e}")
+            raise
+
     def execute_query(self, query: str, params: Optional[Dict] = None) -> pd.DataFrame:
         """
         Execute a SELECT query and return results as DataFrame
@@ -1192,3 +1208,80 @@ class DatabaseManager:
             return False, f"Insufficient balance: ${available:.2f} < ${amount:.2f} needed"
 
         return True, f"Balance OK: ${available:.2f} available"
+
+    # ============================================
+    # SCHEMA UPGRADES (Lifecycle System)
+    # ============================================
+
+    def ensure_lifecycle_schema(self) -> None:
+        """Add lifecycle columns to positions table and create review_reports table."""
+        alter_statements = [
+            "ALTER TABLE positions ADD COLUMN IF NOT EXISTS lifecycle_state VARCHAR(20) DEFAULT 'INCUBATING'",
+            "ALTER TABLE positions ADD COLUMN IF NOT EXISTS predicted_hold_days FLOAT DEFAULT 7.0",
+            "ALTER TABLE positions ADD COLUMN IF NOT EXISTS expected_max_gain_pct FLOAT DEFAULT 0.15",
+            "ALTER TABLE positions ADD COLUMN IF NOT EXISTS last_momentum_3d FLOAT DEFAULT 0.0",
+            "ALTER TABLE positions ADD COLUMN IF NOT EXISTS exit_cooldowns JSONB DEFAULT '{}'",
+            "ALTER TABLE positions ADD COLUMN IF NOT EXISTS entry_features JSONB DEFAULT '{}'",
+        ]
+        for stmt in alter_statements:
+            try:
+                self.execute_command(stmt)
+            except Exception as e:
+                logger.debug(f"Schema alter (may already exist): {e}")
+
+        create_review = """
+        CREATE TABLE IF NOT EXISTS review_reports (
+            id SERIAL PRIMARY KEY,
+            period VARCHAR(100),
+            report_data JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+        try:
+            self.execute_command(create_review)
+            logger.info("Schema upgrade: lifecycle columns + review_reports table ensured")
+        except Exception as e:
+            logger.warning(f"Schema upgrade warning: {e}")
+
+    def get_last_training_date(self) -> Optional[datetime]:
+        """Get the last auto-training date from the database."""
+        try:
+            # Check if training_log table exists
+            if not self.table_exists('training_log'):
+                self.execute_command("""
+                    CREATE TABLE IF NOT EXISTS training_log (
+                        id SERIAL PRIMARY KEY,
+                        trained_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        model_version VARCHAR(20),
+                        metrics JSONB
+                    )
+                """)
+                return None
+            result = self.execute_query(
+                "SELECT trained_at FROM training_log ORDER BY trained_at DESC LIMIT 1"
+            )
+            if not result.empty:
+                return result.iloc[0]['trained_at']
+            return None
+        except Exception as e:
+            logger.warning(f"Could not get last training date: {e}")
+            return None
+
+    def save_training_log(self, model_version: str = "V4", metrics: dict = None) -> None:
+        """Log a training event."""
+        try:
+            if not self.table_exists('training_log'):
+                self.execute_command("""
+                    CREATE TABLE IF NOT EXISTS training_log (
+                        id SERIAL PRIMARY KEY,
+                        trained_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        model_version VARCHAR(20),
+                        metrics JSONB
+                    )
+                """)
+            self.execute_command(
+                "INSERT INTO training_log (model_version, metrics) VALUES (:ver, :met)",
+                {'ver': model_version, 'met': json.dumps(metrics or {})}
+            )
+        except Exception as e:
+            logger.warning(f"Could not save training log: {e}")

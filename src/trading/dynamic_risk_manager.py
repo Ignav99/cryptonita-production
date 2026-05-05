@@ -319,7 +319,8 @@ class DynamicRiskManager:
         tp_levels: Dict,
         stop_loss: float,
         features: Dict[str, float],
-        entry_features: Dict[str, float]
+        entry_features: Dict[str, float],
+        lifecycle_state: str = None,
     ) -> Dict:
         """
         Verifica condiciones de salida inteligente
@@ -353,7 +354,8 @@ class DynamicRiskManager:
         momentum_exit = self._check_momentum_reversal(
             features,
             entry_features,
-            current_profit_pct
+            current_profit_pct,
+            lifecycle_state=lifecycle_state,
         )
         if momentum_exit:
             return momentum_exit
@@ -417,39 +419,36 @@ class DynamicRiskManager:
         self,
         current_features: Dict,
         entry_features: Dict,
-        current_profit_pct: float
+        current_profit_pct: float,
+        lifecycle_state: str = None,
     ) -> Optional[Dict]:
         """
-        Detecta reversión de momentum
-
-        Si momentum se invierte fuertemente y estamos en ganancia, salir
+        Detecta reversión de momentum.
+        Only triggers exit_full if position is PROFITING or DECAYING.
         """
         entry_momentum = entry_features.get('momentum_3d', 0)
         current_momentum = current_features.get('momentum_3d', 0)
 
-        momentum_strength_entry = entry_features.get('momentum_strength', 0)
-        momentum_strength_current = current_features.get('momentum_strength', 0)
-
         # Reversión fuerte: momentum positivo → negativo
         if entry_momentum > 0.02 and current_momentum < -0.02:
-            # Si estamos en ganancia > 3%, salir
             if current_profit_pct > 0.03:
-                return {
-                    'action': 'exit_full',
-                    'reason': 'momentum_reversal',
-                    'quantity': None,  # Full position
-                    'details': f'Momentum reversed: {entry_momentum:.3f} → {current_momentum:.3f}'
-                }
-
-        # Pérdida de momentum strength
-        if momentum_strength_entry > 0.5 and momentum_strength_current < 0.2:
-            if current_profit_pct > 0.05:  # Solo si en ganancia > 5%
-                return {
-                    'action': 'exit_partial',
-                    'reason': 'momentum_weakening',
-                    'quantity': 0.5,  # Salir 50%
-                    'details': f'Momentum strength: {momentum_strength_entry:.2f} → {momentum_strength_current:.2f}'
-                }
+                # Only full exit if position is mature (PROFITING/DECAYING)
+                if lifecycle_state in ('PROFITING', 'DECAYING', None):
+                    return {
+                        'action': 'exit_full',
+                        'reason': 'momentum_reversal',
+                        'quantity': None,
+                        'details': f'Momentum reversed: {entry_momentum:.3f} -> {current_momentum:.3f}'
+                    }
+                else:
+                    # Young position: tighten trailing instead
+                    return {
+                        'action': 'tighten_trailing',
+                        'reason': 'momentum_reversal_young',
+                        'tighten_factor': 0.5,
+                        'cooldown_key': 'momentum_reversal',
+                        'details': f'Momentum reversed but position is {lifecycle_state}, tightening SL'
+                    }
 
         return None
 
@@ -459,9 +458,8 @@ class DynamicRiskManager:
         entry_features: Dict
     ) -> Optional[Dict]:
         """
-        Detecta colapso de volumen
-
-        Si volumen cae drásticamente, puede indicar fin del pump
+        Detecta colapso de volumen.
+        Instead of exit_partial (cascading), tighten trailing stop with cooldown.
         """
         entry_volume_ratio = entry_features.get('volume_ratio_20', 1.0)
         current_volume_ratio = current_features.get('volume_ratio_20', 1.0)
@@ -469,10 +467,11 @@ class DynamicRiskManager:
         # Volumen cae más de 70%
         if entry_volume_ratio > 1.5 and current_volume_ratio < 0.5:
             return {
-                'action': 'exit_partial',
+                'action': 'tighten_trailing',
                 'reason': 'volume_collapse',
-                'quantity': 0.5,  # Salir 50%
-                'details': f'Volume ratio: {entry_volume_ratio:.2f} → {current_volume_ratio:.2f}'
+                'tighten_factor': settings.TIGHTEN_FACTOR_VOLUME,
+                'cooldown_key': 'volume_collapse',
+                'details': f'Volume ratio: {entry_volume_ratio:.2f} -> {current_volume_ratio:.2f}'
             }
 
         return None
@@ -483,29 +482,29 @@ class DynamicRiskManager:
         current_profit_pct: float
     ) -> Optional[Dict]:
         """
-        Detecta patrones bajistas
-
-        - Velas bajistas consecutivas
-        - Lower lows pattern
+        Detecta patrones bajistas.
+        Instead of exit_partial (cascading), tighten trailing stop with cooldown.
         """
         green_candles_5d = current_features.get('green_candles_5d', 0)
         higher_lows_5d = current_features.get('higher_lows_5d', 0)
 
-        # Muchas velas rojas (< 20% verdes en 5 días)
+        # Muchas velas rojas (< 20% verdes en 5 dias)
         if green_candles_5d < 0.2 and current_profit_pct > 0.02:
             return {
-                'action': 'exit_partial',
+                'action': 'tighten_trailing',
                 'reason': 'bearish_candles',
-                'quantity': 0.3,  # Salir 30%
+                'tighten_factor': settings.TIGHTEN_FACTOR_BEARISH,
+                'cooldown_key': 'bearish_candles',
                 'details': f'Green candles ratio: {green_candles_5d:.2f}'
             }
 
         # Pattern de lower lows (bajista)
         if higher_lows_5d < 0.2 and current_profit_pct > 0.03:
             return {
-                'action': 'exit_partial',
+                'action': 'tighten_trailing',
                 'reason': 'lower_lows_pattern',
-                'quantity': 0.3,
+                'tighten_factor': settings.TIGHTEN_FACTOR_BEARISH,
+                'cooldown_key': 'lower_lows',
                 'details': f'Higher lows ratio: {higher_lows_5d:.2f}'
             }
 

@@ -351,6 +351,33 @@ class Settings(BaseSettings):
     }
 
     # ============================================
+    # POSITION LIFECYCLE
+    # ============================================
+    INCUBATION_PCT: float = 0.25          # First 25% of predicted_hold = protected
+    ROTATION_EV_MULTIPLIER: float = 1.5   # new_ev must be 1.5x weakest to rotate
+    ROTATION_MIN_THRESHOLD: float = 0.005 # Minimum absolute improvement to rotate
+    MAX_ZOMBIE_DAYS: int = 14             # Force close zombies at 14 days
+
+    # ============================================
+    # SIGNAL QUEUE
+    # ============================================
+    SIGNAL_QUEUE_MAX_AGE_HOURS: float = 12.0
+    SIGNAL_QUEUE_MAX_SIZE: int = 5
+
+    # ============================================
+    # EXIT OPTIMIZER
+    # ============================================
+    EXIT_COOLDOWN_HOURS: int = 24         # Cooldown between exits for same reason
+    TIGHTEN_FACTOR_BEARISH: float = 0.5   # Reduce SL distance 50% on bearish
+    TIGHTEN_FACTOR_VOLUME: float = 0.6    # Reduce SL distance 40% on volume collapse
+
+    # ============================================
+    # HEALTH MONITOR
+    # ============================================
+    MAX_TRADES_PER_DAY: int = 20          # Circuit breaker
+    STALE_PRICE_ALERT_HOURS: int = 2
+
+    # ============================================
     # SYSTEM
     # ============================================
     TIMEZONE: str = Field(default="UTC", env="TIMEZONE")
