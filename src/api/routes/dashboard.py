@@ -518,6 +518,70 @@ async def initialize_portfolio(
         raise HTTPException(status_code=500, detail=f"Failed to initialize portfolio: {str(e)}")
 
 
+@router.post("/portfolio/recalibrate", response_model=Dict)
+async def recalibrate_portfolio(current_user: dict = Depends(get_current_user)):
+    """
+    Recalibrate portfolio table from actual trades and positions.
+    Fixes desynchronized available_balance, total_invested, and realized_pnl.
+    """
+    try:
+        initial_capital = 10000.0
+
+        # 1. Real invested = sum of (remaining_qty * avg_buy_price) for open positions
+        invested_df = db.execute_query("""
+            SELECT COALESCE(SUM(remaining_quantity * avg_buy_price), 0) as real_invested
+            FROM positions WHERE remaining_quantity > 0.0001
+        """)
+        real_invested = float(invested_df.iloc[0]['real_invested'])
+
+        # 2. Realized PnL from matched BUY/SELL pairs
+        pnl_df = db.execute_query("""
+            SELECT COALESCE(SUM(
+                (s.price - b.price) * LEAST(b.quantity, s.quantity)
+            ), 0) as realized_pnl
+            FROM trades b
+            INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
+            WHERE b.action = 'BUY' AND b.status = 'executed'
+              AND s.action = 'SELL' AND s.status = 'executed'
+        """)
+        realized_pnl = float(pnl_df.iloc[0]['realized_pnl'])
+
+        # 3. Available balance = initial_capital + realized_pnl - real_invested
+        available_balance = initial_capital + realized_pnl - real_invested
+
+        # 4. Update portfolio table
+        db.execute_command("""
+            UPDATE portfolio SET
+                available_balance = :available,
+                total_invested = :invested,
+                realized_pnl = :pnl,
+                last_update = NOW()
+            WHERE id = 1
+        """, {
+            'available': round(available_balance, 2),
+            'invested': round(real_invested, 2),
+            'pnl': round(realized_pnl, 2),
+        })
+
+        # 5. Also clean dust positions
+        db.execute_command("""
+            DELETE FROM positions WHERE remaining_quantity <= 0.0001 AND remaining_quantity IS NOT NULL
+        """)
+
+        total_value = available_balance + real_invested
+        return {
+            'success': True,
+            'available_balance': round(available_balance, 2),
+            'total_invested': round(real_invested, 2),
+            'realized_pnl': round(realized_pnl, 2),
+            'total_value': round(total_value, 2),
+            'message': f'Portfolio recalibrated: ${total_value:.2f} total (available=${available_balance:.2f} + invested=${real_invested:.2f}, realized_pnl=${realized_pnl:.2f})'
+        }
+    except Exception as e:
+        logger.error(f"Recalibrate error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/signal-analysis", response_model=SignalAnalysisSummary)
 async def get_signal_analysis(current_user: dict = Depends(get_current_user)):
     """

@@ -158,6 +158,32 @@ async def startup_event():
     try:
         db = DatabaseManager(settings.get_database_url())
         db.ensure_lifecycle_schema()
+
+        # Recalibrate portfolio from real trades/positions
+        invested_df = db.execute_query("""
+            SELECT COALESCE(SUM(remaining_quantity * avg_buy_price), 0) as real_invested
+            FROM positions WHERE remaining_quantity > 0.0001
+        """)
+        real_invested = float(invested_df.iloc[0]['real_invested'])
+        pnl_df = db.execute_query("""
+            SELECT COALESCE(SUM(
+                (s.price - b.price) * LEAST(b.quantity, s.quantity)
+            ), 0) as realized_pnl
+            FROM trades b
+            INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
+            WHERE b.action = 'BUY' AND b.status = 'executed'
+              AND s.action = 'SELL' AND s.status = 'executed'
+        """)
+        realized_pnl = float(pnl_df.iloc[0]['realized_pnl'])
+        available = 10000.0 + realized_pnl - real_invested
+        db.execute_command("""
+            UPDATE portfolio SET available_balance = :a, total_invested = :i,
+                realized_pnl = :p, last_update = NOW() WHERE id = 1
+        """, {'a': round(available, 2), 'i': round(real_invested, 2), 'p': round(realized_pnl, 2)})
+        # Clean dust
+        db.execute_command("DELETE FROM positions WHERE remaining_quantity <= 0.0001 AND remaining_quantity IS NOT NULL")
+        logger.info(f"Portfolio recalibrated: available=${available:.2f}, invested=${real_invested:.2f}, pnl=${realized_pnl:.2f}")
+
         db.close()
         logger.info("Lifecycle schema ensured")
     except Exception as e:
