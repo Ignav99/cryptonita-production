@@ -166,13 +166,21 @@ async def startup_event():
         """)
         real_invested = float(invested_df.iloc[0]['real_invested'])
         pnl_df = db.execute_query("""
+            WITH numbered_buys AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'BUY' AND status = 'executed'
+            ),
+            numbered_sells AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'SELL' AND status = 'executed'
+            )
             SELECT COALESCE(SUM(
                 (s.price - b.price) * LEAST(b.quantity, s.quantity)
             ), 0) as realized_pnl
-            FROM trades b
-            INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
-            WHERE b.action = 'BUY' AND b.status = 'executed'
-              AND s.action = 'SELL' AND s.status = 'executed'
+            FROM numbered_buys b
+            INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
         """)
         realized_pnl = float(pnl_df.iloc[0]['realized_pnl'])
         available = 10000.0 + realized_pnl - real_invested
@@ -374,18 +382,29 @@ def _generate_review_report(db: DatabaseManager) -> dict:
     if not trades_df.empty and 'total_value' in trades_df.columns:
         volume = float(trades_df['total_value'].astype(float).abs().sum())
 
-    # Closed P&L in period
+    # Closed P&L in period (FIFO matched)
     pnl_query = """
-    SELECT COALESCE(SUM(
-        (s.price - b.price) * LEAST(b.quantity, s.quantity)
-    ), 0) as pnl,
-    COUNT(*) as closed_count,
-    COUNT(CASE WHEN (s.price - b.price) > 0 THEN 1 END) as wins
-    FROM trades b
-    INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
-    WHERE b.action = 'BUY' AND b.status = 'executed'
-      AND s.action = 'SELL' AND s.status = 'executed'
-      AND s.timestamp >= :start
+    WITH numbered_buys AS (
+        SELECT ticker, price, quantity,
+               ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+        FROM trades WHERE action = 'BUY' AND status = 'executed'
+    ),
+    numbered_sells AS (
+        SELECT ticker, price, quantity, timestamp,
+               ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+        FROM trades WHERE action = 'SELL' AND status = 'executed'
+    ),
+    matched AS (
+        SELECT (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl,
+               s.price as sell_price, b.price as buy_price
+        FROM numbered_buys b
+        INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
+        WHERE s.timestamp >= :start
+    )
+    SELECT COALESCE(SUM(pnl), 0) as pnl,
+           COUNT(*) as closed_count,
+           COUNT(CASE WHEN pnl > 0 THEN 1 END) as wins
+    FROM matched
     """
     pnl_df = db.execute_query(pnl_query, {'start': period_start})
 
@@ -420,16 +439,24 @@ def _generate_review_report(db: DatabaseManager) -> dict:
     total_signals = int(sig_df.iloc[0]['total']) if not sig_df.empty else 0
     buy_signals = int(sig_df.iloc[0]['buy_signals']) if not sig_df.empty else 0
 
-    # Best and worst trades
+    # Best and worst trades (FIFO matched)
     best_worst_query = """
+    WITH numbered_buys AS (
+        SELECT ticker, price, quantity,
+               ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+        FROM trades WHERE action = 'BUY' AND status = 'executed'
+    ),
+    numbered_sells AS (
+        SELECT ticker, price, quantity, timestamp,
+               ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+        FROM trades WHERE action = 'SELL' AND status = 'executed'
+    )
     SELECT b.ticker,
            (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl,
            ((s.price - b.price) / NULLIF(b.price, 0)) * 100 as pnl_pct
-    FROM trades b
-    INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
-    WHERE b.action = 'BUY' AND b.status = 'executed'
-      AND s.action = 'SELL' AND s.status = 'executed'
-      AND s.timestamp >= :start
+    FROM numbered_buys b
+    INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
+    WHERE s.timestamp >= :start
     ORDER BY pnl DESC
     """
     bw_df = db.execute_query(best_worst_query, {'start': period_start})

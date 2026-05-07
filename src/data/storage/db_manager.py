@@ -405,7 +405,8 @@ class DatabaseManager:
                 price as entry_price,
                 quantity,
                 timestamp as entry_time,
-                probability
+                probability,
+                ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
             FROM trades
             WHERE action = 'BUY' AND status = 'executed'
         ),
@@ -431,7 +432,7 @@ class DatabaseManager:
                 (s.exit_price - b.entry_price) * LEAST(b.quantity, s.sell_quantity) as pnl,
                 ((s.exit_price - b.entry_price) / b.entry_price) * 100 as pnl_percentage
             FROM buy_trades b
-            INNER JOIN sell_trades s ON b.ticker = s.ticker
+            INNER JOIN sell_trades s ON b.ticker = s.ticker AND b.rn = s.rn
             ORDER BY s.exit_time DESC
             LIMIT :limit
         )
@@ -770,16 +771,22 @@ class DatabaseManager:
                 total_trades = int(day_df['cnt'].sum()) if not day_df.empty else 0
                 total_volume = float(day_df['vol'].sum()) if not day_df.empty else 0.0
 
-                # Closed trades (SELLs) that day with P&L
+                # Closed trades (SELLs) that day with P&L (FIFO matched)
                 closed_query = """
-                SELECT
-                    (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl
-                FROM trades s
-                INNER JOIN trades b ON b.ticker = s.ticker
-                    AND b.action = 'BUY' AND b.status = 'executed'
-                    AND b.timestamp < s.timestamp
-                WHERE s.action = 'SELL' AND s.status = 'executed'
-                  AND DATE(s.timestamp) = :dt
+                WITH numbered_buys AS (
+                    SELECT ticker, price, quantity, timestamp,
+                           ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                    FROM trades WHERE action = 'BUY' AND status = 'executed'
+                ),
+                numbered_sells AS (
+                    SELECT ticker, price, quantity, timestamp,
+                           ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                    FROM trades WHERE action = 'SELL' AND status = 'executed'
+                )
+                SELECT (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl
+                FROM numbered_buys b
+                INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
+                WHERE DATE(s.timestamp) = :dt
                 """
                 closed_df = self.execute_query(closed_query, {'dt': trade_date})
 
@@ -837,32 +844,48 @@ class DatabaseManager:
             total_trades = int(day_df.iloc[0]['total']) if not day_df.empty else 0
             total_volume = float(day_df.iloc[0]['volume']) if not day_df.empty else 0.0
 
-            # Cumulative realized P&L
+            # Cumulative realized P&L (FIFO matched)
             pnl_query = """
+            WITH numbered_buys AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'BUY' AND status = 'executed'
+            ),
+            numbered_sells AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'SELL' AND status = 'executed'
+            )
             SELECT COALESCE(SUM(
                 (s.price - b.price) * LEAST(b.quantity, s.quantity)
             ), 0) as realized_pnl
-            FROM trades b
-            INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
-            WHERE b.action = 'BUY' AND b.status = 'executed'
-              AND s.action = 'SELL' AND s.status = 'executed'
+            FROM numbered_buys b
+            INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
             """
             pnl_result = self.execute_query(pnl_query).iloc[0]['realized_pnl']
             total_pnl = float(pnl_result) if pnl_result is not None else 0.0
 
-            # Win rate from all closed trades
+            # Win rate from all closed trades (FIFO matched)
             wr_query = """
-            WITH closed AS (
+            WITH numbered_buys AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'BUY' AND status = 'executed'
+            ),
+            numbered_sells AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'SELL' AND status = 'executed'
+            ),
+            matched AS (
                 SELECT (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl
-                FROM trades b
-                INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
-                WHERE b.action = 'BUY' AND b.status = 'executed'
-                  AND s.action = 'SELL' AND s.status = 'executed'
+                FROM numbered_buys b
+                INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
             )
             SELECT
                 COUNT(CASE WHEN pnl > 0 THEN 1 END) as wins,
                 COUNT(*) as total
-            FROM closed
+            FROM matched
             """
             wr_df = self.execute_query(wr_query)
             wins = int(wr_df.iloc[0]['wins']) if not wr_df.empty else 0
@@ -927,15 +950,23 @@ class DatabaseManager:
             open_pnl_result = self.execute_query(open_pnl_query).iloc[0]['total']
             open_pnl = float(open_pnl_result) if open_pnl_result is not None else 0.0
 
-            # Realized P&L from closed positions
+            # Realized P&L from closed positions (FIFO matched)
             closed_pnl_query = """
+            WITH numbered_buys AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'BUY' AND status = 'executed'
+            ),
+            numbered_sells AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'SELL' AND status = 'executed'
+            )
             SELECT COALESCE(SUM(
                 (s.price - b.price) * LEAST(b.quantity, s.quantity)
             ), 0) as realized_pnl
-            FROM trades b
-            INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
-            WHERE b.action = 'BUY' AND b.status = 'executed'
-              AND s.action = 'SELL' AND s.status = 'executed'
+            FROM numbered_buys b
+            INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
             """
             realized_pnl_result = self.execute_query(closed_pnl_query).iloc[0]['realized_pnl']
             realized_pnl = float(realized_pnl_result) if realized_pnl_result is not None else 0.0
@@ -946,20 +977,26 @@ class DatabaseManager:
             # Total P&L percentage (based on initial capital)
             total_pnl_pct = (total_pnl / initial_capital * 100) if initial_capital > 0 else 0.0
 
-            # Win rate (ONLY from closed positions)
+            # Win rate (ONLY from closed positions, FIFO matched)
             win_rate_query = """
-            WITH closed_trades AS (
-                SELECT
-                    b.ticker,
-                    (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl
-                FROM trades b
-                INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
-                WHERE b.action = 'BUY' AND b.status = 'executed'
-                  AND s.action = 'SELL' AND s.status = 'executed'
+            WITH numbered_buys AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'BUY' AND status = 'executed'
+            ),
+            numbered_sells AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'SELL' AND status = 'executed'
+            ),
+            matched AS (
+                SELECT (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl
+                FROM numbered_buys b
+                INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
             )
             SELECT
                 COUNT(CASE WHEN pnl > 0 THEN 1 END)::float / NULLIF(COUNT(*), 0) as win_rate
-            FROM closed_trades
+            FROM matched
             """
             win_rate_result = self.execute_query(win_rate_query)
             if len(win_rate_result) > 0 and win_rate_result.iloc[0]['win_rate'] is not None:
@@ -970,16 +1007,24 @@ class DatabaseManager:
             # Today's stats
             today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
-            # Today's P&L (from closed trades today)
+            # Today's P&L (from closed trades today, FIFO matched)
             today_pnl_query = """
+            WITH numbered_buys AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'BUY' AND status = 'executed'
+            ),
+            numbered_sells AS (
+                SELECT ticker, price, quantity, timestamp,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'SELL' AND status = 'executed'
+            )
             SELECT COALESCE(SUM(
                 (s.price - b.price) * LEAST(b.quantity, s.quantity)
             ), 0) as today_pnl
-            FROM trades b
-            INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
-            WHERE b.action = 'BUY' AND b.status = 'executed'
-              AND s.action = 'SELL' AND s.status = 'executed'
-              AND s.timestamp >= :today_start
+            FROM numbered_buys b
+            INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
+            WHERE s.timestamp >= :today_start
             """
             today_pnl_result = self.execute_query(today_pnl_query, {'today_start': today_start}).iloc[0]['today_pnl']
             today_pnl = float(today_pnl_result) if today_pnl_result is not None else 0.0

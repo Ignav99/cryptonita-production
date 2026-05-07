@@ -534,15 +534,23 @@ async def recalibrate_portfolio(current_user: dict = Depends(get_current_user)):
         """)
         real_invested = float(invested_df.iloc[0]['real_invested'])
 
-        # 2. Realized PnL from matched BUY/SELL pairs
+        # 2. Realized PnL from matched BUY/SELL pairs (FIFO matched)
         pnl_df = db.execute_query("""
+            WITH numbered_buys AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'BUY' AND status = 'executed'
+            ),
+            numbered_sells AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'SELL' AND status = 'executed'
+            )
             SELECT COALESCE(SUM(
                 (s.price - b.price) * LEAST(b.quantity, s.quantity)
             ), 0) as realized_pnl
-            FROM trades b
-            INNER JOIN trades s ON b.ticker = s.ticker AND s.timestamp > b.timestamp
-            WHERE b.action = 'BUY' AND b.status = 'executed'
-              AND s.action = 'SELL' AND s.status = 'executed'
+            FROM numbered_buys b
+            INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
         """)
         realized_pnl = float(pnl_df.iloc[0]['realized_pnl'])
 
