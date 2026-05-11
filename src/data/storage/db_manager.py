@@ -933,20 +933,20 @@ class DatabaseManager:
             executed_query = "SELECT COUNT(*) as count FROM trades WHERE status = 'executed'"
             executed_trades = self.execute_query(executed_query).iloc[0]['count']
 
-            # Active positions
-            positions_query = "SELECT COUNT(*) as count FROM positions"
+            # Active positions (exclude dust/zombie positions)
+            positions_query = "SELECT COUNT(*) as count FROM positions WHERE remaining_quantity > 0.0001"
             active_positions = self.execute_query(positions_query).iloc[0]['count']
 
-            # Total value of open positions
-            positions_value_query = "SELECT COALESCE(SUM(total_value), 0) as total FROM positions"
+            # Total value of open positions (exclude dust/zombie positions)
+            positions_value_query = "SELECT COALESCE(SUM(total_value), 0) as total FROM positions WHERE remaining_quantity > 0.0001"
             positions_result = self.execute_query(positions_value_query).iloc[0]['total']
             positions_value = float(positions_result) if positions_result is not None else 0.0
 
             # Total portfolio value (USDT balance + positions value)
             portfolio_value = usdt_balance + positions_value
 
-            # Total P&L from open positions
-            open_pnl_query = "SELECT COALESCE(SUM(pnl), 0) as total FROM positions"
+            # Total P&L from open positions (exclude dust/zombie positions)
+            open_pnl_query = "SELECT COALESCE(SUM(pnl), 0) as total FROM positions WHERE remaining_quantity > 0.0001"
             open_pnl_result = self.execute_query(open_pnl_query).iloc[0]['total']
             open_pnl = float(open_pnl_result) if open_pnl_result is not None else 0.0
 
@@ -1217,10 +1217,10 @@ class DatabaseManager:
         Returns:
             Updated portfolio state
         """
-        # Get sum of positions at entry price (not current price)
+        # Get sum of positions at entry price (not current price), exclude dust
         positions_query = """
         SELECT COALESCE(SUM(quantity * avg_buy_price), 0) as total_invested
-        FROM positions
+        FROM positions WHERE remaining_quantity > 0.0001
         """
         result = self.execute_query(positions_query)
         actual_invested = float(result.iloc[0]['total_invested'])

@@ -122,10 +122,7 @@ class TradingBot:
                 # Skip and clean up dust positions (too small to trade)
                 if remaining_qty <= 0 or self.binance.is_dust_position(ticker, abs(remaining_qty), current_price):
                     logger.warning(f"🧹 Cleaning dust position: {ticker} (remaining: {remaining_qty})")
-                    self.db.execute_command(
-                        "UPDATE positions SET remaining_quantity = 0 WHERE ticker = :ticker",
-                        {'ticker': ticker}
-                    )
+                    self.db.delete_position(ticker)
                     dust_cleaned += 1
                     continue
 
@@ -1171,6 +1168,7 @@ class TradingBot:
                     self.lifecycle_manager.on_close(position, ticker)
                     await self._execute_exit(ticker, position['remaining_quantity'], current_price, exit_decision['reason'])
                     del self.positions[ticker]
+                    self.db.delete_position(ticker)
                     continue
 
                 elif exit_decision['action'] == 'exit_partial':
@@ -1221,6 +1219,7 @@ class TradingBot:
                     logger.warning(f"🛑 {ticker} STOP LOSS hit: ${current_price:.2f} <= ${position['stop_loss']:.2f}")
                     await self._execute_exit(ticker, position['remaining_quantity'], current_price, 'stop_loss')
                     del self.positions[ticker]
+                    self.db.delete_position(ticker)
                     continue
 
                 # 8. Sync full position state to database (including lifecycle)
@@ -1276,11 +1275,8 @@ class TradingBot:
             # Guard: skip dust positions that are too small to trade
             if self.binance.is_dust_position(ticker, abs(quantity), price):
                 logger.info(f"🧹 Skipping dust sell for {ticker} (qty={quantity:.2e}, ~${abs(quantity)*price:.4f})")
-                # Clean up: mark position as fully exited in DB
-                self.db.execute_command(
-                    "UPDATE positions SET remaining_quantity = 0 WHERE ticker = :ticker",
-                    {'ticker': ticker}
-                )
+                # Clean up: delete position entirely to avoid zombie PnL
+                self.db.delete_position(ticker)
                 return
 
             logger.info(f"💰 Executing SELL: {quantity} {ticker} @ ${price:.4f}")
@@ -1300,11 +1296,8 @@ class TradingBot:
 
             # Final check: rounded quantity could be 0
             if quantity <= 0:
-                logger.info(f"🧹 Rounded qty is 0 for {ticker}, marking as closed")
-                self.db.execute_command(
-                    "UPDATE positions SET remaining_quantity = 0 WHERE ticker = :ticker",
-                    {'ticker': ticker}
-                )
+                logger.info(f"🧹 Rounded qty is 0 for {ticker}, deleting position")
+                self.db.delete_position(ticker)
                 return
 
             # Execute market sell

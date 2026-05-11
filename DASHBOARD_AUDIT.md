@@ -1,12 +1,53 @@
 # Dashboard Audit - PnL Fix & Complete Logic Reference
 
-**Date:** 2026-05-07
-**Status:** Fixed and deployed
-**Bug severity:** Critical (PnL showing ~-$65,000 instead of real value)
+**Date:** 2026-05-07 (updated 2026-05-11)
+**Status:** Fixed and deployed (two rounds of fixes)
+**Bug severity:** Critical
 
 ---
 
-## Bug Found: Cross-Join PnL Calculation
+## Bug #2 Found: Zombie Positions with Corrupted PnL (May 11, 2026)
+
+### Root Cause
+
+Two issues combined:
+
+1. **`_execute_exit()` left zombie positions**: When dust/rounding made sell impossible, it set `remaining_quantity=0` but did NOT delete the row or clear `pnl`/`total_value`. Result: positions with qty=0 but PnL of -$17 million (e.g. FLOKIUSDT).
+
+2. **Some full-exit callers forgot `db.delete_position()`**: The `exit_full` and `stop_loss` paths in `_monitor_positions` did `del self.positions[ticker]` (memory only) but never called `db.delete_position()`.
+
+3. **Stats queries had no filter**: `get_dashboard_stats()` summed `pnl`, `total_value`, and counted positions from ALL rows in `positions` table — including zombies with millions in corrupted PnL.
+
+### Data Found in Production
+
+| Position | remaining_qty | PnL | total_value |
+|----------|--------------|-----|-------------|
+| FLOKIUSDT | 0 | -$17,457,293 | -$152,512,890 |
+| MANTAUSDT | 0 | -$6,164 | -$114,512 |
+| ALGOUSDT | 0 | -$5,564 | -$77,719 |
+| IMXUSDT | 0 | -$2,802 | -$25,065 |
+| APTUSDT | 0 | -$473 | -$5,932 |
+| **5 dust total** | **0** | **-$17,472,298** | |
+| **6 real positions** | **>0** | **-$13.54** | |
+
+### Fix Applied
+
+1. **`_execute_exit()`**: Dust/rounding paths now call `db.delete_position()` instead of `UPDATE remaining_quantity=0`
+2. **Full exit paths**: Added `db.delete_position(ticker)` after `exit_full` and `stop_loss` in `_monitor_positions`
+3. **Bot startup**: Dust cleanup now calls `db.delete_position()` instead of UPDATE
+4. **`get_dashboard_stats()`**: All 3 positions queries now filter `WHERE remaining_quantity > 0.0001`
+5. **`sync_portfolio_invested()`**: Also filters dust positions
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/data/storage/db_manager.py` | 4 queries: added `WHERE remaining_quantity > 0.0001` |
+| `src/bot/trading_bot.py` | 5 fixes: delete_position instead of UPDATE qty=0, added missing delete calls |
+
+---
+
+## Bug #1 Found: Cross-Join PnL Calculation (May 7, 2026)
 
 ### Root Cause
 
