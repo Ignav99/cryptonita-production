@@ -12,11 +12,12 @@ Features per ticker (6):
   cg_dev_commits_4w_log     — log10(commit_count_4w+1) / 3, capped at 1.0
   cg_dev_activity_score     — composite dev activity (commits + code changes), 0–1
 
-Cache TTL: 3600s (1h). Cold start: ~2 min (47 sequential calls at 2.5s each).
-Subsequent calls within 1h: instant (served from cache).
+Cache TTL: 3600s (1h). Cold start: ~3 min (47 sequential calls at 3.5s each, ~17 rpm).
+Subsequent calls within 1h: instant (served from cache). Exponential backoff on 429.
 """
 
 import time
+import random
 import asyncio
 import numpy as np
 import httpx
@@ -145,7 +146,7 @@ class CoinGeckoFetcher:
     Cold start takes ~2 min; all subsequent calls within 1h return instantly.
     """
 
-    RATE_LIMIT_DELAY = 2.5   # seconds between calls
+    RATE_LIMIT_DELAY = 3.5   # seconds between calls — safe for keyless free tier (~17 rpm)
     CACHE_TTL = 3600.0        # 1 hour
 
     def __init__(self, timeout: float = 15.0):
@@ -158,25 +159,36 @@ class CoinGeckoFetcher:
     # ------------------------------------------------------------------
 
     async def _fetch_one(self, coin_id: str, client: httpx.AsyncClient) -> Optional[Dict]:
-        """Fetch community + dev data for one coin ID."""
+        """Fetch community + dev data for one coin ID with exponential backoff on 429."""
         url = (
             f"{_BASE_URL}/coins/{coin_id}"
             "?localization=false&tickers=false&market_data=false"
             "&community_data=true&developer_data=true&sparkline=false"
         )
-        try:
-            resp = await client.get(url, headers=_HEADERS, timeout=self.timeout)
-            if resp.status_code == 429:
-                logger.warning(f"CoinGecko rate limit hit for {coin_id} — backing off 30s")
-                await asyncio.sleep(30)
+        max_retries = 4
+        for attempt in range(max_retries):
+            try:
                 resp = await client.get(url, headers=_HEADERS, timeout=self.timeout)
-            if resp.status_code != 200:
-                logger.debug(f"CoinGecko {coin_id}: HTTP {resp.status_code}")
-                return None
-            return resp.json()
-        except Exception as exc:
-            logger.debug(f"CoinGecko fetch error ({coin_id}): {exc}")
-            return None
+                if resp.status_code == 429:
+                    # Exponential backoff with jitter: 2^attempt * (15 + random 0-10s)
+                    wait = (2 ** attempt) * 15 + random.uniform(0, 10)
+                    logger.warning(
+                        f"CoinGecko 429 for {coin_id} — backoff {wait:.0f}s (attempt {attempt + 1}/{max_retries})"
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                if resp.status_code != 200:
+                    logger.debug(f"CoinGecko {coin_id}: HTTP {resp.status_code}")
+                    return None
+                return resp.json()
+            except Exception as exc:
+                if attempt < max_retries - 1:
+                    wait = (2 ** attempt) * 5
+                    logger.debug(f"CoinGecko fetch error ({coin_id}), retry in {wait}s: {exc}")
+                    await asyncio.sleep(wait)
+                else:
+                    logger.debug(f"CoinGecko fetch failed ({coin_id}) after {max_retries} attempts: {exc}")
+        return None
 
     # ------------------------------------------------------------------
     # Public API
