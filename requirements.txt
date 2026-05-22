@@ -80,3 +80,7 @@ feedparser==6.0.11
 click==8.1.7
 rich==13.7.0
 psutil==5.9.6
+
+# Engine Upgrade — Intelligence Layer
+anthropic>=0.30.0            # Claude Haiku for LLM news sentiment
+statsmodels>=0.14.0          # ETS/ARIMA time series forecasting features

@@ -94,4 +94,14 @@ services:
       - key: KELLY_FRACTION
         value: "0.25"
 
+      # Engine Upgrade — Intelligence Layer
+      - key: ANTHROPIC_API_KEY
+        sync: false  # Set in Render dashboard (secret) — enables Claude Haiku news sentiment
+
+      - key: COINGECKO_API_KEY
+        sync: false  # Optional — free tier works without key
+
+      - key: USE_CHRONOS
+        value: "false"  # Set to "true" only on 2GB+ RAM plan
+
     healthCheckPath: /health

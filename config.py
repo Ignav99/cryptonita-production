@@ -284,6 +284,16 @@ class Settings(BaseSettings):
     HEALTHCHECK_PING_URL: Optional[str] = Field(default=None, env="HEALTHCHECK_PING_URL")
 
     # ============================================
+    # ENGINE UPGRADE — External Intelligence APIs
+    # ============================================
+    # Claude Haiku for news sentiment analysis (~$0.03-0.05/day)
+    ANTHROPIC_API_KEY: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
+    # CoinGecko for social/developer data (free tier, optional pro key)
+    COINGECKO_API_KEY: Optional[str] = Field(default=None, env="COINGECKO_API_KEY")
+    # Enable Amazon Chronos probabilistic forecasting (requires 2GB+ RAM on Render)
+    USE_CHRONOS: bool = Field(default=False, env="USE_CHRONOS")
+
+    # ============================================
     # SECTOR ALLOCATION (max simultaneous positions per sector)
     # ============================================
     COIN_SECTORS: Dict[str, str] = {

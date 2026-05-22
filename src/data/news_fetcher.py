@@ -19,6 +19,7 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 from config import settings
+from src.data.llm_sentiment import LLMSentimentAnalyzer
 
 # Sentiment keywords
 POSITIVE_KEYWORDS = {
@@ -47,6 +48,10 @@ class NewsFetcher:
         self._cache: Optional[Dict] = None
         self._cache_time: float = 0
         self._cache_ttl: float = 900  # 15 min cache
+
+        # LLM sentiment analyzer (Claude Haiku) — uses ANTHROPIC_API_KEY from settings
+        _api_key = getattr(settings, "ANTHROPIC_API_KEY", None) or None
+        self._llm = LLMSentimentAnalyzer(api_key=_api_key)
 
     async def _fetch_feed(self, url: str) -> List[Dict]:
         """Fetch and parse a single RSS feed"""
@@ -158,3 +163,32 @@ class NewsFetcher:
             "news_count_24h": float(count),
             "news_impact_score": avg_sentiment * count,
         }
+
+    def get_ticker_features_llm(self, ticker: str, news_data: Dict) -> Dict[str, float]:
+        """
+        Calculate news features using Claude Haiku LLM analysis.
+        Includes legacy keyword features (always computed) plus LLM features.
+        Falls back gracefully if ANTHROPIC_API_KEY is not configured.
+
+        Returns merged dict with:
+          Legacy: news_sentiment_24h, news_count_24h, news_impact_score
+          LLM:    llm_sentiment_score, llm_sentiment_confidence,
+                  llm_news_count, llm_regulatory_signal, llm_hack_signal
+        """
+        # Get legacy keyword features (always computed, fast)
+        legacy = self.get_ticker_features(ticker, news_data)
+
+        # Filter matching articles for LLM analysis
+        articles = news_data.get("articles", [])
+        matching = [
+            a for a in articles
+            if self._match_ticker(a.get("title", "") + " " + a.get("summary", ""), ticker)
+        ]
+
+        if not matching:
+            llm_features = self._llm._empty_result()
+        else:
+            ticker_name = settings.TICKER_DISPLAY_NAMES.get(ticker, ticker.replace("USDT", ""))
+            llm_features = self._llm.analyze_ticker(ticker, ticker_name, matching)
+
+        return {**legacy, **llm_features}
