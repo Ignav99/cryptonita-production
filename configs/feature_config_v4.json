@@ -1,6 +1,6 @@
 {
-  "version": "V4.1",
-  "description": "Feature configuration for ML Pipeline V4.1 - Ensemble + News/Social/Whale",
+  "version": "V4.3",
+  "description": "Feature configuration for ML Pipeline V4.3 - Ensemble + CoinGecko Social/Dev + LLM News",
   "feature_groups": {
     "ohlcv_base": [
       "open", "high", "low", "close", "volume", "ema_200"
@@ -63,6 +63,19 @@
     "mean_reversion_v42": [
       "price_zscore_20", "price_zscore_50", "return_5d_pct",
       "return_10d_pct", "overextension_score"
+    ],
+    "coingecko_v43": [
+      "cg_market_cap_rank_norm", "cg_sentiment_votes_up",
+      "cg_twitter_followers_log", "cg_reddit_subscribers_log",
+      "cg_dev_commits_4w_log", "cg_dev_activity_score"
+    ],
+    "llm_news_v43": [
+      "llm_sentiment_score", "llm_sentiment_confidence", "llm_news_count",
+      "llm_regulatory_signal", "llm_hack_signal"
+    ],
+    "timeseries_v44": [
+      "ets_expected_return_15d", "ets_uncertainty_15d",
+      "trend_slope_14d", "momentum_divergence"
     ]
   },
   "all_features": [
@@ -95,9 +108,16 @@
     "reddit_mentions_24h", "reddit_sentiment", "social_buzz_score",
     "whale_tx_count_24h", "whale_net_flow", "whale_activity_score",
     "price_zscore_20", "price_zscore_50", "return_5d_pct",
-    "return_10d_pct", "overextension_score"
+    "return_10d_pct", "overextension_score",
+    "cg_market_cap_rank_norm", "cg_sentiment_votes_up",
+    "cg_twitter_followers_log", "cg_reddit_subscribers_log",
+    "cg_dev_commits_4w_log", "cg_dev_activity_score",
+    "llm_sentiment_score", "llm_sentiment_confidence", "llm_news_count",
+    "llm_regulatory_signal", "llm_hack_signal",
+    "ets_expected_return_15d", "ets_uncertainty_15d",
+    "trend_slope_14d", "momentum_divergence"
   ],
-  "total_features": 94,
+  "total_features": 109,
   "selected_features": null,
   "selection_method": "SHAP + Boruta (run train_model.py --mode full to populate)"
 }

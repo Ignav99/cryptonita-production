@@ -26,6 +26,7 @@ from src.data.defi_fetcher import DeFiFetcher
 from src.data.news_fetcher import NewsFetcher
 from src.data.social_fetcher import SocialFetcher
 from src.data.whale_fetcher import WhaleFetcher
+from src.data.coingecko_fetcher import CoinGeckoFetcher
 from src.models.ensemble import EnsembleModel
 from src.models.regime_detector import RegimeDetector
 from src.models.position_sizer import KellyPositionSizer
@@ -61,6 +62,7 @@ class TradingPredictorV4:
         self.news_fetcher = NewsFetcher()
         self.social_fetcher = SocialFetcher()
         self.whale_fetcher = WhaleFetcher()
+        self.coingecko_fetcher = CoinGeckoFetcher()
 
         # Initialize position sizer
         kelly_fraction = getattr(settings, "KELLY_FRACTION", 0.25)
@@ -74,10 +76,15 @@ class TradingPredictorV4:
         # Cache for external data (refreshed each scan cycle)
         self._cached_external = None
         self._cached_regime = None
+        self._cached_coingecko: Optional[Dict] = None
 
         # Per-ticker probability history for z-score normalization
         self._prob_history: Dict[str, list] = {}
         self._PROB_HISTORY_SIZE = 50
+
+        # Cooldown tracker: {ticker: {"ts": float, "won": bool}}
+        # 7-day cooldown after a loss → 50% position size
+        self._trade_results: Dict[str, Dict] = {}
 
         logger.info(
             f"TradingPredictorV4 initialized — Default threshold: {self.threshold}, "
@@ -184,6 +191,61 @@ class TradingPredictorV4:
             return None
         return (prob - mean) / std
 
+    def _passes_trend_filter(self, ohlcv_data: pd.DataFrame) -> Tuple[bool, str]:
+        """
+        Trend quality filter: block entries in confirmed downtrends or over-extended moves.
+
+        Rules:
+          - EMA50 < EMA200 (death cross) → block: entering a downtrend is high-risk
+          - Price > 1.20 × EMA50 → block: over-extended, late entry with poor R/R
+
+        Returns (passes: bool, reason: str).
+        If insufficient data (<200 candles), passes by default (no block).
+        """
+        try:
+            if len(ohlcv_data) < 200:
+                return True, "insufficient_data"
+
+            close = ohlcv_data["close"]
+            ema50  = float(close.ewm(span=50,  adjust=False).mean().iloc[-1])
+            ema200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1])
+            current = float(close.iloc[-1])
+
+            if ema50 < ema200:
+                return False, f"downtrend_guard (EMA50={ema50:.4f} < EMA200={ema200:.4f})"
+
+            if current > ema50 * 1.20:
+                return False, f"overextended (price={current:.2f} > 1.20×EMA50={ema50 * 1.20:.2f})"
+
+            return True, "ok"
+        except Exception as exc:
+            logger.debug(f"Trend filter error: {exc}")
+            return True, "error_passthrough"
+
+    def register_trade_result(self, ticker: str, won: bool):
+        """
+        Register the result of a closed trade.
+        Losses trigger a 7-day cooldown with 50% position size reduction.
+        Called by the trade executor after a position is closed.
+        """
+        import time as _time
+        self._trade_results[ticker] = {"ts": _time.time(), "won": won}
+        label = "WIN" if won else "LOSS — 7-day cooldown active"
+        logger.info(f"[Cooldown] {ticker}: registered {label}")
+
+    def _in_cooldown(self, ticker: str) -> bool:
+        """True if this ticker is in a 7-day post-loss cooldown period."""
+        import time as _time
+        result = self._trade_results.get(ticker)
+        if result is None or result.get("won", True):
+            return False
+        elapsed = _time.time() - result["ts"]
+        return elapsed < 7 * 86400  # 7 days in seconds
+
+    def _get_cooldown_mult(self, ticker: str) -> float:
+        """Position size multiplier: 0.5 during cooldown, 1.0 otherwise."""
+        return 0.5 if self._in_cooldown(ticker) else 1.0
+
     def _classify_confidence(self, probability: float, profile: Dict, ticker: str = "") -> str:
         """
         Band-pass confidence filter with z-score enhancement.
@@ -257,6 +319,34 @@ class TradingPredictorV4:
         except RuntimeError:
             return asyncio.run(self._fetch_external_data())
 
+    def _fetch_coingecko_data_sync(self) -> Dict:
+        """
+        Sync wrapper for CoinGecko data fetch.
+        The fetcher has its own 1h cache — cold start takes ~2 min,
+        subsequent calls within 1h return instantly.
+        """
+        import concurrent.futures
+
+        def _run():
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(
+                    self.coingecko_fetcher.get_all_coingecko_data()
+                )
+            finally:
+                loop.close()
+
+        try:
+            asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                # 3-min timeout: 47 coins × 2.5s + buffer
+                return pool.submit(_run).result(timeout=180)
+        except RuntimeError:
+            return asyncio.run(self.coingecko_fetcher.get_all_coingecko_data())
+        except Exception as exc:
+            logger.warning(f"CoinGecko fetch failed: {exc} — using NaN features")
+            return {}
+
     def predict_single(
         self,
         ticker: str,
@@ -286,14 +376,17 @@ class TradingPredictorV4:
             if btc_data is not None and self.regime_detector.model is not None:
                 self._cached_regime = self.regime_detector.predict(btc_data)
 
-            # Build ticker-specific news/social/whale data
-            ticker_news = self.news_fetcher.get_ticker_features(
+            # Build ticker-specific news/social/whale/coingecko data
+            ticker_news = self.news_fetcher.get_ticker_features_llm(
                 ticker, ext.get("news", {})
             ) if hasattr(self, 'news_fetcher') else {}
             ticker_social = self.social_fetcher.get_ticker_features(
                 ticker, ext.get("social", {})
             ) if hasattr(self, 'social_fetcher') else {}
             ticker_whale = ext.get("whale", {})
+            ticker_cg = self.coingecko_fetcher.get_ticker_features(
+                ticker, self._cached_coingecko or {}
+            )
 
             # Calculate V4 features
             feature_vector = self.feature_engineer.calculate_single_prediction_features_v4(
@@ -308,6 +401,7 @@ class TradingPredictorV4:
                 news_data=ticker_news,
                 social_data=ticker_social,
                 whale_data=ticker_whale,
+                coingecko_data=ticker_cg,
             )
 
             if feature_vector is None:
@@ -341,6 +435,17 @@ class TradingPredictorV4:
                 for name, val in zip(log_names, feature_vector)
             }
 
+            # V4.5: Apply trend filter — block BUY signals in downtrend / over-extended
+            if prediction == 1:
+                passes, filter_reason = self._passes_trend_filter(ohlcv_data)
+                if not passes:
+                    prediction = 0
+                    logger.info(f"[V4] {ticker}: HOLD — trend filter blocked ({filter_reason})")
+
+            # V4.5: Log cooldown status (affects position sizing, not signal)
+            if prediction == 1 and self._in_cooldown(ticker):
+                logger.info(f"[V4] {ticker}: BUY — in loss cooldown, position size ×0.5")
+
             signal_type = "BUY" if prediction == 1 else "HOLD"
             regime = self._cached_regime.get("regime_name", "?") if self._cached_regime else "?"
             logger.info(
@@ -372,6 +477,9 @@ class TradingPredictorV4:
 
         # Refresh external data once per batch
         self._cached_external = self._fetch_external_data_sync()
+
+        # CoinGecko data (1h cache in fetcher — instant if warm, ~2 min if cold)
+        self._cached_coingecko = self._fetch_coingecko_data_sync()
 
         logger.info(f"[V4] Making predictions for {len(tickers_data)} tickers...")
 
@@ -486,14 +594,15 @@ class TradingPredictorV4:
         conf_config = settings.CONFIDENCE_LEVELS.get(confidence, settings.CONFIDENCE_LEVELS["exploratory"])
         position_mult = conf_config.get("position_mult", 0.25)
 
+        cooldown_mult = self._get_cooldown_mult(ticker)
         result = self.position_sizer.calculate_position_size(
             current_price=current_price,
             portfolio_value=portfolio_value,
             probability=probability,
             regime_data=self._cached_regime,
             max_position_usd=settings.MAX_POSITION_SIZE_USD,
-            kelly_mult=profile["kelly_mult"] * position_mult,
-            max_position_pct_override=profile["max_position_pct"] * position_mult,
+            kelly_mult=profile["kelly_mult"] * position_mult * cooldown_mult,
+            max_position_pct_override=profile["max_position_pct"] * position_mult * cooldown_mult,
         )
 
         return {
@@ -501,6 +610,7 @@ class TradingPredictorV4:
             "usd_value": result["usd_value"],
             "position_pct": result["position_pct"],
             "confidence": confidence,
+            "cooldown_active": self._in_cooldown(ticker),
         }
 
     async def get_macro_data_async(self) -> Dict:

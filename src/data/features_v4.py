@@ -80,6 +80,16 @@ class FeatureEngineerV4(FeatureEngineer):
             # Mean-Reversion
             "price_zscore_20", "price_zscore_50", "return_5d_pct",
             "return_10d_pct", "overextension_score",
+            # CoinGecko social/dev (V4.3)
+            "cg_market_cap_rank_norm", "cg_sentiment_votes_up",
+            "cg_twitter_followers_log", "cg_reddit_subscribers_log",
+            "cg_dev_commits_4w_log", "cg_dev_activity_score",
+            # LLM news sentiment (V4.3)
+            "llm_sentiment_score", "llm_sentiment_confidence", "llm_news_count",
+            "llm_regulatory_signal", "llm_hack_signal",
+            # Time series forward-looking (V4.4)
+            "ets_expected_return_15d", "ets_uncertainty_15d",
+            "trend_slope_14d", "momentum_divergence",
         ]
 
     # ------------------------------------------------------------------
@@ -100,9 +110,10 @@ class FeatureEngineerV4(FeatureEngineer):
         news_data: Optional[Dict] = None,
         social_data: Optional[Dict] = None,
         whale_data: Optional[Dict] = None,
+        coingecko_data: Optional[Dict] = None,
     ) -> pd.DataFrame:
         """
-        Calculate all ~89 features (V3 base + V4 extensions + news/social/whale).
+        Calculate all ~105 features (V3 base + V4 extensions + news/social/whale + CoinGecko + LLM).
 
         Returns DataFrame with NaN for unavailable features (tree models handle this).
         """
@@ -142,6 +153,13 @@ class FeatureEngineerV4(FeatureEngineer):
         df = self._calculate_news_features(df, news_data)
         df = self._calculate_social_features(df, social_data)
         df = self._calculate_whale_features(df, whale_data)
+
+        # --- V4.3 new features (CoinGecko + LLM news) ---
+        df = self._calculate_coingecko_features(df, coingecko_data)
+        df = self._calculate_llm_news_features(df, news_data)
+
+        # --- V4.4 time series forward-looking features ---
+        df = self._calculate_timeseries_features(df)
 
         # Replace inf with NaN (tree models handle NaN natively)
         df = df.replace([np.inf, -np.inf], np.nan)
@@ -400,6 +418,48 @@ class FeatureEngineerV4(FeatureEngineer):
         df["whale_activity_score"] = data.get("whale_activity_score", np.nan)
         return df
 
+    def _calculate_coingecko_features(self, df: pd.DataFrame, data: Optional[Dict]) -> pd.DataFrame:
+        """CoinGecko social/dev features (6) — from CoinGeckoFetcher per-ticker data"""
+        if data is None:
+            data = {}
+        df["cg_market_cap_rank_norm"]   = data.get("cg_market_cap_rank_norm", np.nan)
+        df["cg_sentiment_votes_up"]     = data.get("cg_sentiment_votes_up", np.nan)
+        df["cg_twitter_followers_log"]  = data.get("cg_twitter_followers_log", np.nan)
+        df["cg_reddit_subscribers_log"] = data.get("cg_reddit_subscribers_log", np.nan)
+        df["cg_dev_commits_4w_log"]     = data.get("cg_dev_commits_4w_log", np.nan)
+        df["cg_dev_activity_score"]     = data.get("cg_dev_activity_score", np.nan)
+        return df
+
+    def _calculate_llm_news_features(self, df: pd.DataFrame, data: Optional[Dict]) -> pd.DataFrame:
+        """LLM news sentiment features (5) — from NewsFetcher.get_ticker_features_llm()"""
+        if data is None:
+            data = {}
+        df["llm_sentiment_score"]      = data.get("llm_sentiment_score", np.nan)
+        df["llm_sentiment_confidence"] = data.get("llm_sentiment_confidence", np.nan)
+        df["llm_news_count"]           = data.get("llm_news_count", np.nan)
+        df["llm_regulatory_signal"]    = data.get("llm_regulatory_signal", np.nan)
+        df["llm_hack_signal"]          = data.get("llm_hack_signal", np.nan)
+        return df
+
+    def _calculate_timeseries_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Time series forward-looking features (4) — ETS forecast + trend"""
+        try:
+            from src.data.timeseries_features import TimeSeriesFeatureEngineer
+            ts_eng = TimeSeriesFeatureEngineer()
+            ts_feats = ts_eng.calculate_ts_features(df)
+        except Exception as exc:
+            logger.debug(f"TS features unavailable: {exc}")
+            ts_feats = {
+                "ets_expected_return_15d": np.nan,
+                "ets_uncertainty_15d":     np.nan,
+                "trend_slope_14d":         np.nan,
+                "momentum_divergence":     np.nan,
+            }
+
+        for name, value in ts_feats.items():
+            df[name] = value
+        return df
+
     # ------------------------------------------------------------------
     # Feature extraction
     # ------------------------------------------------------------------
@@ -434,6 +494,7 @@ class FeatureEngineerV4(FeatureEngineer):
         news_data: Optional[Dict] = None,
         social_data: Optional[Dict] = None,
         whale_data: Optional[Dict] = None,
+        coingecko_data: Optional[Dict] = None,
     ) -> Optional[np.ndarray]:
         """Calculate V4 features for a single prediction (latest datapoint)"""
         try:
@@ -450,6 +511,7 @@ class FeatureEngineerV4(FeatureEngineer):
                 news_data=news_data,
                 social_data=social_data,
                 whale_data=whale_data,
+                coingecko_data=coingecko_data,
             )
             if len(df) == 0:
                 return None

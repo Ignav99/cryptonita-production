@@ -82,8 +82,6 @@ class EnsembleModel:
             cv: Walk-forward CV splitter
             regime_features: Optional regime state array for meta-learner input
         """
-        from sklearn.linear_model import LogisticRegression
-
         self.feature_names = feature_names
         if cv is None:
             cv = PurgedWalkForwardCV()
@@ -124,10 +122,15 @@ class EnsembleModel:
         # Handle NaN in meta features
         meta_X = np.nan_to_num(meta_X, nan=0.5)
 
-        # Train meta-learner
-        logger.info("Training meta-learner (LogisticRegression)...")
-        self.meta_model = LogisticRegression(
-            C=1.0, max_iter=1000, random_state=42, solver="lbfgs"
+        # Train meta-learner (LightGBM captures non-linear interactions between base models)
+        logger.info("Training meta-learner (LGBMClassifier)...")
+        import lightgbm as lgb
+        self.meta_model = lgb.LGBMClassifier(
+            n_estimators=100,
+            num_leaves=15,
+            learning_rate=0.05,
+            random_state=42,
+            verbose=-1,
         )
         self.meta_model.fit(meta_X, oos_labels)
 

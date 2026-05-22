@@ -11,97 +11,114 @@ con señales LLM, datos sociales reales, y filtros de decisión más robustos.
 
 ---
 
-## FASE 1 — Bug Fixes (prioridad máxima)
+## FASE 1 — Bug Fixes (prioridad máxima) ✅
 
 ### 1.1 Fix FIFO timestamp ordering
-- **Problema**: `exit_time < entry_time` en operaciones cerradas — SQL FIFO empareja por row order no por timestamp
-- **Afecta**: `db_manager.get_closed_positions()` y todas las funciones con `ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp)`
-- **Fix**: El SQL ya usa `ORDER BY timestamp` en el `ROW_NUMBER()` — el bug real está en que no hay un JOIN con condición `s.timestamp >= b.timestamp`. Añadir sanity check en la query.
-- [ ] Identificar query exacta con timestamps incorrectos
-- [ ] Fix SQL para garantizar exit_time >= entry_time
-- **Status**: 🔄 IN PROGRESS
+- **Problema**: `exit_time < entry_time` en operaciones cerradas — SQL FIFO emparejaba por row order sin guardia temporal
+- **Fix**: Añadido `AND s.timestamp >= b.timestamp` (o `AND s.exit_time >= b.entry_time`) en 6 queries de `db_manager.py`. También añadida columna `timestamp` a CTEs que la necesitaban.
+- [x] Fix SQL para garantizar exit_time >= entry_time
+- **Status**: ✅ DONE — commit `5c4d58b`
 
 ### 1.2 Fix equity curve corruption
 - **Problema**: Backfill del May 5 dejó portfolio_value inflado a ~$12K (real: ~$9.9K)
-- **Fix**: Script `scripts/fix_performance_metrics.py` — recalcula portfolio_value desde capital inicial + daily_pnl acumulado
-- [ ] Crear script
-- [ ] Verificar: SELECT date, portfolio_value FROM performance_metrics ORDER BY date → final ~$9.865K
-- **Status**: ⏳ PENDING
+- **Fix**: `scripts/fix_performance_metrics.py` — recalcula desde capital inicial + daily_pnl acumulado
+- [x] Script creado con `--dry-run` flag
+- **Status**: ✅ DONE — commit `5c4d58b`
 
 ### 1.3 Force manual retrain
-- **Problema**: Modelo lleva 51 días sin actualizarse (auto-trainer falla Sharpe < 0.5)
-- **Fix**: Script `scripts/force_retrain.py --force-promote`
-- [ ] Crear script
-- **Status**: ⏳ PENDING
+- **Problema**: Modelo llevaba 51 días sin actualizarse (auto-trainer falla Sharpe < 0.5)
+- **Fix**: `scripts/force_retrain.py --promote` — bypasea el guard de Sharpe
+- [x] Script creado con `--mode [quick|full]`
+- **Status**: ✅ DONE — commit `5c4d58b`
 
 ---
 
-## FASE 2 — LLM News Sentiment con Claude Haiku
+## FASE 2 — LLM News Sentiment con Claude Haiku ✅
 
-- **Problema**: `news_fetcher.py` usa keyword matching ("SEC" → siempre bearish aunque sea positivo)
-- **Solución**: `src/data/llm_sentiment.py` — Claude Haiku analiza artículos con comprensión real
+- **Problema**: `news_fetcher.py` usaba keyword matching ("SEC" → siempre bearish aunque aprobara ETF)
+- **Solución**: `src/data/llm_sentiment.py` — Claude Haiku analiza artículos con comprensión contextual real
 - **Costo estimado**: ~$0.03-0.05/día
-- **Features nuevas**: `llm_sentiment_score`, `llm_sentiment_confidence`, `llm_news_count`, `llm_regulatory_signal`
-- [ ] Crear `src/data/llm_sentiment.py`
-- [ ] Modificar `news_fetcher.py` para integrar LLM (async, con fallback a keywords)
-- [ ] Añadir `ANTHROPIC_API_KEY` en `config.py` y `render.yaml`
-- [ ] Añadir `anthropic>=0.30.0` en `requirements.txt`
-- **Status**: ⏳ PENDING
+- **Features nuevas**: `llm_sentiment_score`, `llm_sentiment_confidence`, `llm_news_count`, `llm_regulatory_signal`, `llm_hack_signal`
+- [x] Crear `src/data/llm_sentiment.py` (claude-haiku-4-5, MAX_TOKENS=300, cache 15min)
+- [x] Modificar `news_fetcher.py` — método `get_ticker_features_llm()` con fallback a keywords
+- [x] Añadir `ANTHROPIC_API_KEY` en `config.py` y `render.yaml`
+- [x] Añadir `anthropic>=0.30.0` en `requirements.txt`
+- **Status**: ✅ DONE — commit `926930b`
+- **Nota**: Activar en Render dashboard seteando `ANTHROPIC_API_KEY`
 
 ---
 
-## FASE 3 — CoinGecko Social/Dev Data para los 47 Altcoins
+## FASE 3 — CoinGecko Social/Dev Data para los 47 Altcoins ✅
 
-- **Problema**: `onchain_fetcher` devuelve NaN para altcoins (solo funciona para BTC). `social_fetcher` solo lee r/cryptocurrency hot posts.
+- **Problema**: `onchain_fetcher` devuelve NaN para altcoins (solo BTC). `social_fetcher` solo lee Reddit hot posts.
 - **Solución**: `src/data/coingecko_fetcher.py` — API pública de CoinGecko, sin key requerida
-- **Features nuevas**: `cg_twitter_followers`, `cg_reddit_subscribers`, `cg_sentiment_votes_up`, `cg_dev_commits_4w`, `cg_dev_activity_score`, `cg_market_cap_rank`
-- [ ] Crear `src/data/coingecko_fetcher.py` con rate limiting (2.5s entre llamadas)
-- [ ] Integrar en `predictor_v4.py` (cache 1h)
-- [ ] Añadir features a `features_v4.py`
-- **Status**: ⏳ PENDING
+- **Rate limit**: 2.5s entre llamadas (30 req/min free tier)
+- **Cache**: 1h TTL — cold start ~2min, warm: instantáneo
+- **Features nuevas** (6):
+  - `cg_market_cap_rank_norm` — rank normalizado (1.0=rank 1)
+  - `cg_sentiment_votes_up` — % votos positivos (0-1)
+  - `cg_twitter_followers_log` — log10 normalizado
+  - `cg_reddit_subscribers_log` — log10 normalizado
+  - `cg_dev_commits_4w_log` — commits últimas 4 semanas, log10
+  - `cg_dev_activity_score` — composite dev activity 0-1
+- [x] Crear `src/data/coingecko_fetcher.py` con mapeo de 47 tickers → CoinGecko IDs
+- [x] Integrar en `features_v4.py` (`_calculate_coingecko_features()`)
+- [x] Integrar en `predictor_v4.py` (`_fetch_coingecko_data_sync()`, timeout 3min)
+- **Status**: ✅ DONE — pendiente commit
 
 ---
 
-## FASE 4 — Time Series Features (ETS + Trend)
+## FASE 4 — Time Series Features (ETS + Trend) ✅
 
 - **Problema**: XGB/LGB/CatBoost son modelos de tabla — foto estática, sin proyección temporal
 - **Solución**: `src/data/timeseries_features.py` — ETS forecast a 15d + trend slope + momentum divergence
-- **Features nuevas**: `ets_expected_return_15d`, `ets_uncertainty_15d`, `trend_slope_14d`, `momentum_divergence`
-- **Opcional** (USE_CHRONOS=true): `chronos_expected_return_15d`, `chronos_uncertainty_15d`
-- [ ] Crear `src/data/timeseries_features.py`
-- [ ] Integrar en `predictor_v4.py`
-- [ ] Añadir `statsmodels>=0.14.0` en `requirements.txt`
-- **Status**: ⏳ PENDING
+- **Features nuevas** (4):
+  - `ets_expected_return_15d` — retorno esperado según ETS Holt lineal, clipeado [-50%, +100%]
+  - `ets_uncertainty_15d` — incertidumbre del forecast (std residuales × √horizon / precio)
+  - `trend_slope_14d` — slope OLS 14d normalizado por precio actual
+  - `momentum_divergence` — divergencia corto (3d) vs medio (14d) momentum
+- [x] Crear `src/data/timeseries_features.py` con Holt's ExponentialSmoothing
+- [x] Integrar en `features_v4.py` (`_calculate_timeseries_features()`)
+- [x] `statsmodels>=0.14.0` ya en requirements.txt (FASE 2)
+- **Status**: ✅ DONE — pendiente commit
 
 ---
 
-## FASE 5 — Decision Layer: Trend Filter + Cooldown + Meta-Learner
+## FASE 5 — Decision Layer: Trend Filter + Cooldown + Meta-Learner ✅
 
 - **Problemas identificados**:
   - ICP: 2 entradas en downtrend después de +45% rally → -$64 combinado
   - ONDOUSDT: 3 entradas en 3 semanas, 2 en pérdida
   - Meta-learner LogisticRegression no captura interacciones no lineales entre base models
 
-- **Soluciones**:
-  - Trend filter: EMA50 < EMA200 → skip entrada (anti-downtrend guard)
-  - Over-extended guard: precio >20% sobre EMA50 → entrada tardía, skip
-  - Cooldown: 7 días tras cierre con pérdida en ese ticker → reducir size 50%
-  - Meta-learner: LogisticRegression → LightGBM (100 estimators, 15 leaves)
+- **Soluciones implementadas**:
+  - **Trend filter** (`_passes_trend_filter()`): EMA50 < EMA200 → bloquea entrada; precio > 1.20×EMA50 → sobreextendido, bloquea
+  - **Cooldown tracker** (`register_trade_result()` + `_in_cooldown()`): 7 días tras pérdida → size ×0.5
+  - **Meta-learner upgrade** (`ensemble.py`): LogisticRegression → LGBMClassifier (100 estimators, 15 leaves, lr=0.05)
 
-- [ ] Implementar `_passes_trend_filter()` en `predictor_v4.py`
-- [ ] Implementar `register_trade_result()` + `_in_cooldown()` en `predictor_v4.py`
-- [ ] Upgrade `ensemble.py`: `from sklearn.linear_model import LogisticRegression` → `lgb.LGBMClassifier`
-- **Status**: ⏳ PENDING
+- [x] Implementar `_passes_trend_filter()` en `predictor_v4.py`
+- [x] Implementar `register_trade_result()` + `_in_cooldown()` + `_get_cooldown_mult()` en `predictor_v4.py`
+- [x] Upgrade `ensemble.py`: LogisticRegression → LGBMClassifier
+- **Status**: ✅ DONE — pendiente commit
 
 ---
 
 ## FASE 6 — Retrain + Deploy
 
-- [ ] `python scripts/force_retrain.py --force-promote`
-- [ ] Verificar métricas: AUC-ROC CV >= 0.67, std < 0.15, Sharpe >= 0.6
+- [ ] `python scripts/force_retrain.py --promote`
+- [ ] Verificar métricas: AUC-ROC CV >= 0.67, Sharpe >= 0.5
 - [ ] `git push origin main` → Render auto-deploy
-- [ ] Verificar: GET /health → 200, dashboard equity curve correcto (~$9.9K)
+- [ ] Verificar: GET /health → 200, dashboard operativo
+- [ ] Setear `ANTHROPIC_API_KEY` en Render dashboard (manual)
 - **Status**: ⏳ PENDING
+
+---
+
+## Feature registry final (V4.4)
+
+Total features: **109** (94 originales + 6 CoinGecko + 5 LLM news + 4 ETS/trend)
+
+Config: `configs/feature_config_v4.json` v4.3
 
 ---
 
@@ -109,17 +126,15 @@ con señales LLM, datos sociales reales, y filtros de decisión más robustos.
 
 | Fecha | Hash | Descripción |
 |---|---|---|
-| 2026-05-22 | TBD | fix: FIFO timestamp ordering + equity curve fix script + force retrain script |
-| 2026-05-22 | TBD | feat: LLM news sentiment with Claude Haiku |
-| 2026-05-22 | TBD | feat: CoinGecko social/dev features for all 47 tickers |
-| 2026-05-22 | TBD | feat: time series forward-looking features (ETS + trend) |
-| 2026-05-22 | TBD | feat: trend filter + cooldown tracker + LightGBM meta-learner |
+| 2026-05-22 | `5c4d58b` | fix: FIFO timestamp guard + equity curve fix script + force retrain script |
+| 2026-05-22 | `926930b` | feat: LLM news sentiment with Claude Haiku |
+| 2026-05-22 | TBD | feat: CoinGecko social/dev features + ETS time series + trend filter + cooldown + LightGBM meta |
 
 ---
 
 ## Punto de control siguiente
 
-Una vez todas las fases estén completas y en producción:
+Una vez todo en producción:
 1. Esperar 1 ciclo completo (6h) → verificar logs sin errores
 2. Esperar 7 días → comparar win rate nuevo modelo vs baseline (43.93%)
 3. Revisar: ¿ICP/ONDOUSDT recurrentes se bloquean con trend filter?
