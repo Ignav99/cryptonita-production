@@ -116,7 +116,12 @@ class TradingBot:
             for _, pos in positions_df.iterrows():
                 ticker = pos['ticker']
                 entry_price = float(pos['avg_buy_price'])
-                remaining_qty = float(pos.get('remaining_quantity', pos['quantity'])) if pd.notna(pos.get('remaining_quantity')) else float(pos['quantity'])
+                _max_qty = float(pos['quantity'])
+                _raw_remaining = pos.get('remaining_quantity')
+                if pd.notna(_raw_remaining):
+                    remaining_qty = max(0.0, min(float(_raw_remaining), _max_qty))
+                else:
+                    remaining_qty = _max_qty
                 current_price = float(pos['current_price']) if pd.notna(pos.get('current_price')) else entry_price
 
                 # Skip and clean up dust positions (too small to trade)
@@ -442,11 +447,17 @@ class TradingBot:
             buy_signals = (predictions_df['prediction'] == 1).sum()
 
             for _, row in predictions_df.iterrows():
+                features = row['features']
+                # Extract rejection_reason injected by predictor, keep features clean
+                rejection_reason = None
+                if isinstance(features, dict):
+                    rejection_reason = features.pop('_rejection_reason', None)
                 self.db.save_signal(
                     ticker=row['ticker'],
                     signal_type=row['signal_type'],
                     probability=row['probability'],
-                    features=row['features']
+                    features=features,
+                    rejection_reason=rejection_reason,
                 )
 
             logger.info(f"📊 Signals: {buy_signals} BUY / {total_signals} total")
@@ -1176,7 +1187,7 @@ class TradingBot:
                     logger.info(f"{ticker} PARTIAL EXIT: {exit_decision['reason']} ({exit_decision['quantity']*100:.0f}%)")
                     await self._execute_exit(ticker, exit_qty, current_price, exit_decision['reason'])
 
-                    position['remaining_quantity'] -= exit_qty
+                    position['remaining_quantity'] = max(0.0, position['remaining_quantity'] - exit_qty)
 
                     # Mark TP level as hit if applicable
                     if 'level' in exit_decision:
@@ -1405,13 +1416,20 @@ class TradingBot:
                         logger.info(f"🗑️ Removed closed position: {ticker}")
                         continue
 
-                    # Get actual quantity from Binance
+                    # Get actual quantity from Binance — Binance is the source of truth
                     actual_quantity = balances[asset]['total']
 
-                    # Update position prices ONLY — preserve TP/SL data
-                    remaining_qty = actual_quantity
-                    if 'remaining_quantity' in db_pos and pd.notna(db_pos['remaining_quantity']):
-                        remaining_qty = float(db_pos['remaining_quantity'])
+                    # remaining_qty = min(Binance actual, DB value)
+                    # Binance can only go DOWN (OCO/SL partial fills reduce actual holdings)
+                    # The DB value is preserved for partial exits the bot executed explicitly.
+                    # If they diverge, Binance wins — it reflects reality.
+                    db_remaining = float(db_pos['remaining_quantity']) if (
+                        'remaining_quantity' in db_pos
+                        and pd.notna(db_pos['remaining_quantity'])
+                        and float(db_pos.get('remaining_quantity', 0)) > 0
+                    ) else actual_quantity
+                    remaining_qty = min(actual_quantity, db_remaining)
+
                     avg_price = float(db_pos['avg_buy_price'])
                     total_val = remaining_qty * current_price
                     pnl = (current_price - avg_price) * remaining_qty
@@ -1419,12 +1437,15 @@ class TradingBot:
 
                     self.db.execute_command(
                         """UPDATE positions
-                           SET quantity = :qty, current_price = :price,
+                           SET quantity = :qty,
+                               remaining_quantity = :remaining_qty,
+                               current_price = :price,
                                total_value = :total_val, pnl = :pnl,
                                pnl_percentage = :pnl_pct, last_update = NOW()
                            WHERE ticker = :ticker""",
                         {
                             'qty': actual_quantity,
+                            'remaining_qty': remaining_qty,
                             'price': current_price,
                             'total_val': total_val,
                             'pnl': pnl,

@@ -131,6 +131,7 @@ class CoinSummary(BaseModel):
     signal_count_7d: int = 0
     buy_count_7d: int = 0
     last_scan: Optional[datetime] = None
+    latest_rejection_reason: Optional[str] = None
 
 
 class CoinTrend(BaseModel):

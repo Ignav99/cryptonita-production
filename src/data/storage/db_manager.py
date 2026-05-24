@@ -215,7 +215,8 @@ class DatabaseManager:
         ticker: str,
         signal_type: str,
         probability: float,
-        features: Dict[str, Any]
+        features: Dict[str, Any],
+        rejection_reason: Optional[str] = None,
     ) -> int:
         """
         Save a trading signal
@@ -225,13 +226,15 @@ class DatabaseManager:
             signal_type: BUY, SELL, or HOLD
             probability: Model prediction probability
             features: Feature values as dict
+            rejection_reason: Why signal was rejected — None for BUY, else
+                              "above_ceiling", "below_floor", "trend_filter", etc.
 
         Returns:
             Signal ID
         """
         query = """
-        INSERT INTO signals (ticker, signal_type, probability, features, timestamp)
-        VALUES (:ticker, :signal_type, :probability, :features, :timestamp)
+        INSERT INTO signals (ticker, signal_type, probability, features, rejection_reason, timestamp)
+        VALUES (:ticker, :signal_type, :probability, :features, :rejection_reason, :timestamp)
         RETURNING id
         """
         params = {
@@ -239,6 +242,7 @@ class DatabaseManager:
             'signal_type': signal_type,
             'probability': probability,
             'features': json.dumps(features),
+            'rejection_reason': rejection_reason,
             'timestamp': datetime.utcnow()
         }
 
@@ -282,7 +286,7 @@ class DatabaseManager:
     def get_all_latest_signals(self) -> pd.DataFrame:
         """Get the latest signal per ticker (DISTINCT ON)"""
         query = """
-        SELECT DISTINCT ON (ticker) id, ticker, signal_type, probability, timestamp
+        SELECT DISTINCT ON (ticker) id, ticker, signal_type, probability, rejection_reason, timestamp
         FROM signals
         ORDER BY ticker, timestamp DESC
         """

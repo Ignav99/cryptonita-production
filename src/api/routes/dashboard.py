@@ -177,6 +177,7 @@ async def get_coin_summaries(current_user: dict = Depends(get_current_user)):
                 signal_count_7d=signal_count,
                 buy_count_7d=buy_count,
                 last_scan=row['timestamp'],
+                latest_rejection_reason=row.get('rejection_reason'),
             ))
 
         results.sort(key=lambda x: x.latest_probability, reverse=True)

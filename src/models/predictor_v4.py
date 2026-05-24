@@ -246,35 +246,37 @@ class TradingPredictorV4:
         """Position size multiplier: 0.5 during cooldown, 1.0 otherwise."""
         return 0.5 if self._in_cooldown(ticker) else 1.0
 
-    def _classify_confidence(self, probability: float, profile: Dict, ticker: str = "") -> str:
+    def _classify_confidence(self, probability: float, profile: Dict, ticker: str = "") -> tuple:
         """
         Band-pass confidence filter with z-score enhancement.
         threshold = CEILING (reject overfit signals above this)
         threshold_medium = FLOOR (minimum to enter)
         Z-score >= 1.5 sigma → "high" confidence (significantly above normal for this coin)
 
-        Returns: "high", "medium", or "none"
+        Returns: (confidence: str, rejection_reason: str | None)
+          confidence:       "high", "medium", or "none"
+          rejection_reason: None if tradeable, else "above_ceiling" or "below_floor"
         """
-        ceiling = profile["threshold"]  # 0.42 — reject above
-        floor = profile.get("threshold_medium", profile["threshold"])  # 0.28
+        ceiling = profile["threshold"]
+        floor = profile.get("threshold_medium", profile["threshold"])
 
         if probability >= ceiling:
-            return "none"  # REJECT overfit zone
+            return "none", "above_ceiling"  # REJECT overfit zone
 
         if probability >= floor:
-            # Check z-score for high confidence upgrade
             if ticker:
                 zscore = self._get_prob_zscore(ticker, probability)
                 if zscore is not None and zscore >= 1.5:
-                    return "high"
-            return "medium"
+                    return "high", None
+            return "medium", None
 
-        return "none"
+        return "none", "below_floor"
 
     def get_signal_confidence(self, ticker: str, probability: float) -> str:
         """Public method to get confidence level for a ticker/probability."""
         profile = self._get_ticker_profile(ticker)
-        return self._classify_confidence(probability, profile, ticker)
+        confidence, _ = self._classify_confidence(probability, profile, ticker)
+        return confidence
 
     async def _fetch_external_data(self) -> Dict[str, Dict]:
         """Fetch all external data sources concurrently"""
@@ -425,7 +427,7 @@ class TradingPredictorV4:
             # Use dynamic threshold per ticker with z-score enhanced confidence
             profile = self._get_ticker_profile(ticker)
             self._update_prob_history(ticker, probability)
-            confidence = self._classify_confidence(probability, profile, ticker)
+            confidence, rejection_reason = self._classify_confidence(probability, profile, ticker)
             prediction = 1 if confidence != "none" else 0
 
             # Features dict for logging
@@ -440,6 +442,7 @@ class TradingPredictorV4:
                 passes, filter_reason = self._passes_trend_filter(ohlcv_data)
                 if not passes:
                     prediction = 0
+                    rejection_reason = "trend_filter"
                     logger.info(f"[V4] {ticker}: HOLD — trend filter blocked ({filter_reason})")
 
             # V4.5: Log cooldown status (affects position sizing, not signal)
@@ -447,6 +450,8 @@ class TradingPredictorV4:
                 logger.info(f"[V4] {ticker}: BUY — in loss cooldown, position size ×0.5")
 
             signal_type = "BUY" if prediction == 1 else "HOLD"
+            # Store rejection_reason in features_dict for DB logging
+            features_dict['_rejection_reason'] = rejection_reason if prediction == 0 else None
             regime = self._cached_regime.get("regime_name", "?") if self._cached_regime else "?"
             logger.info(
                 f"[V4] {ticker}: {signal_type} (p={probability:.4f}, "
@@ -524,7 +529,7 @@ class TradingPredictorV4:
                     row["probability"],
                     self._get_ticker_profile(row["ticker"]),
                     row["ticker"]
-                ) != "none",
+                )[0] != "none",
                 axis=1,
             )
             signals = predictions_df[mask].copy()
@@ -544,13 +549,19 @@ class TradingPredictorV4:
         Returns (should_trade, reason).
         """
         profile = self._get_ticker_profile(ticker)
-        confidence = self._classify_confidence(probability, profile, ticker)
+        confidence, rejection_reason = self._classify_confidence(probability, profile, ticker)
 
         if confidence == "none":
-            lowest = profile.get("threshold_low", profile["threshold"])
+            ceiling = profile["threshold"]
+            floor = profile.get("threshold_medium", profile["threshold"])
+            if rejection_reason == "above_ceiling":
+                return False, (
+                    f"above_ceiling: prob={probability:.4f} >= ceiling={ceiling} "
+                    f"(tier {profile['tier']}) — model overfit zone"
+                )
             return False, (
-                f"Probability {probability:.4f} below minimum threshold "
-                f"{lowest} (tier {profile['tier']})"
+                f"below_floor: prob={probability:.4f} < floor={floor} "
+                f"(tier {profile['tier']})"
             )
 
         # Check position limits per confidence level
@@ -590,7 +601,7 @@ class TradingPredictorV4:
         Calculate position size using Kelly Criterion with tier + confidence adjustments.
         """
         profile = self._get_ticker_profile(ticker)
-        confidence = self._classify_confidence(probability, profile, ticker)
+        confidence, _ = self._classify_confidence(probability, profile, ticker)
         conf_config = settings.CONFIDENCE_LEVELS.get(confidence, settings.CONFIDENCE_LEVELS["exploratory"])
         position_mult = conf_config.get("position_mult", 0.25)
 

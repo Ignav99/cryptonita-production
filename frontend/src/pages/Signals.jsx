@@ -105,11 +105,20 @@ export default function Signals() {
     {
       key: 'latest_signal_type',
       label: 'Signal',
-      render: (v) => (
-        <Badge variant={v === 'BUY' ? 'success' : v === 'SELL' ? 'danger' : 'neutral'}>
-          {v}
-        </Badge>
-      ),
+      render: (v, row) => {
+        if (v === 'HOLD' && row.latest_rejection_reason === 'above_ceiling') {
+          return (
+            <Badge variant="warning" title={`Prob ${(row.latest_probability * 100).toFixed(1)}% exceeds ceiling — overfit zone`}>
+              CEILING
+            </Badge>
+          );
+        }
+        return (
+          <Badge variant={v === 'BUY' ? 'success' : v === 'SELL' ? 'danger' : 'neutral'}>
+            {v}
+          </Badge>
+        );
+      },
     },
     {
       key: 'latest_probability',
@@ -163,11 +172,20 @@ export default function Signals() {
     {
       key: 'signal_type',
       label: 'Signal',
-      render: (v) => (
-        <Badge variant={v === 'BUY' ? 'success' : v === 'SELL' ? 'danger' : 'neutral'}>
-          {v}
-        </Badge>
-      ),
+      render: (v, row) => {
+        if (v === 'HOLD' && row.rejection_reason === 'above_ceiling') {
+          return (
+            <Badge variant="warning" title={`Prob ${(row.probability * 100).toFixed(1)}% exceeds ceiling — overfit zone`}>
+              CEILING
+            </Badge>
+          );
+        }
+        return (
+          <Badge variant={v === 'BUY' ? 'success' : v === 'SELL' ? 'danger' : 'neutral'}>
+            {v}
+          </Badge>
+        );
+      },
     },
     {
       key: 'probability',
