@@ -34,7 +34,8 @@ from loguru import logger
 
 def _get_engine():
     from src.data.storage.db_manager import DatabaseManager
-    return DatabaseManager().engine
+    from config import settings
+    return DatabaseManager(settings.get_database_url()).engine
 
 
 # ──────────────────────────────────────────────────────────────────────────────
