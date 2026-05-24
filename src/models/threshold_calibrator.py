@@ -129,7 +129,7 @@ class ThresholdCalibrator:
             SELECT
                 s.probability,
                 t.pnl,
-                CASE WHEN t.pnl > 0 THEN 1 ELSE 0 END AS won
+                (t.pnl > 0)::int AS won
             FROM trades t
             JOIN signals s
               ON s.ticker = t.ticker
