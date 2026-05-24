@@ -70,8 +70,13 @@ class TradingPredictorV4:
 
         # Trading parameters
         self.threshold = settings.PREDICTION_THRESHOLD  # Default fallback
-        self.risk_profiles = settings.COIN_RISK_PROFILES
-        self.default_profile = settings.DEFAULT_RISK_PROFILE
+        # Deep-copy so we can mutate without touching the shared settings object
+        import copy
+        self.risk_profiles = copy.deepcopy(dict(settings.COIN_RISK_PROFILES))
+        self.default_profile = copy.deepcopy(dict(settings.DEFAULT_RISK_PROFILE))
+
+        # Load calibrated thresholds from DB (overrides config values per ticker)
+        self._load_calibrated_thresholds()
 
         # Cache for external data (refreshed each scan cycle)
         self._cached_external = None
@@ -129,6 +134,57 @@ class TradingPredictorV4:
         if not loaded:
             logger.error("No V4 model available — predictions will return HOLD")
 
+    def _load_calibrated_thresholds(self):
+        """
+        Load per-ticker calibrated thresholds from the coin_thresholds table
+        and override the corresponding values in self.risk_profiles.
+
+        floor   → threshold_medium (and threshold_low)
+        ceiling → threshold
+
+        Tickers without a calibrated entry keep their config defaults.
+        This is non-fatal: if the table doesn't exist yet (first deploy),
+        a warning is logged and config defaults are used.
+        """
+        try:
+            from src.models.threshold_calibrator import ThresholdCalibrator
+            calibrator = ThresholdCalibrator()
+            calibrated = calibrator.load_all_thresholds()
+
+            if not calibrated:
+                logger.info("[V4] No calibrated thresholds in DB — using config defaults")
+                return
+
+            overridden = 0
+            for ticker, thresholds in calibrated.items():
+                floor = thresholds["floor"]
+                ceiling = thresholds["ceiling"]
+
+                if ticker in self.risk_profiles:
+                    self.risk_profiles[ticker]["threshold"] = ceiling
+                    self.risk_profiles[ticker]["threshold_medium"] = floor
+                    self.risk_profiles[ticker]["threshold_low"] = floor
+                else:
+                    # Ticker not in static config — add it using the default profile as base
+                    import copy
+                    profile = copy.deepcopy(self.default_profile)
+                    profile["threshold"] = ceiling
+                    profile["threshold_medium"] = floor
+                    profile["threshold_low"] = floor
+                    self.risk_profiles[ticker] = profile
+
+                overridden += 1
+
+            logger.info(
+                f"[V4] Applied calibrated thresholds for {overridden} tickers "
+                f"(total profiles: {len(self.risk_profiles)})"
+            )
+
+        except Exception as exc:
+            logger.warning(
+                f"[V4] Could not load calibrated thresholds (using config defaults): {exc}"
+            )
+
     def reload_model(self):
         """Reload model from DB after auto-training promotes a new version. Thread-safe."""
         with self._lock:
@@ -156,6 +212,12 @@ class TradingPredictorV4:
                 self._active_version = version
                 self._needs_reload = False
                 logger.success(f"Hot-reloaded V4 model v{version}")
+
+                # Also reload calibrated thresholds — new model may have new calibration
+                import copy
+                self.risk_profiles = copy.deepcopy(dict(settings.COIN_RISK_PROFILES))
+                self.default_profile = copy.deepcopy(dict(settings.DEFAULT_RISK_PROFILE))
+                self._load_calibrated_thresholds()
 
             except Exception as e:
                 logger.error(f"Failed to reload model: {e}")

@@ -473,6 +473,18 @@ class AutoTrainer:
                 self.model_store.promote_version(version)
                 status = "promoted"
                 logger.success(f"Model v{version} promoted to active!")
+
+                # Calibrate per-ticker thresholds after every promotion
+                try:
+                    from src.models.threshold_calibrator import ThresholdCalibrator
+                    calibrator = ThresholdCalibrator()
+                    await loop.run_in_executor(
+                        None,
+                        lambda: calibrator.calibrate_all(model_version=version),
+                    )
+                    logger.success("[AutoTrainer] Threshold calibration complete.")
+                except Exception as cal_exc:
+                    logger.warning(f"[AutoTrainer] Threshold calibration failed (non-fatal): {cal_exc}")
             else:
                 status = "completed"
                 logger.info(f"Model v{version} trained but not promoted")
