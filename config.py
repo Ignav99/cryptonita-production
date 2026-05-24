@@ -187,8 +187,7 @@ class Settings(BaseSettings):
         # AI (Tier 3)
         "TAOUSDT":    {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "ARKMUSDT":   {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
-        # RWA (Tier 2 - institutional narrative)
-        "ONDOUSDT":   {"tier": 2, "threshold": 0.80, "threshold_medium": 0.60, "threshold_low": 0.60, "max_position_pct": 0.12, "kelly_mult": 1.0},
+        "ONDOUSDT":   {"tier": 2, "threshold": 0.42, "threshold_medium": 0.25, "threshold_low": 0.25, "max_position_pct": 0.12, "kelly_mult": 1.0},
         # Infra/DePIN (Tier 3)
         "ARUSDT":     {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
         "IOTAUSDT":   {"tier": 3, "threshold": 0.42, "threshold_medium": 0.28, "threshold_low": 0.28, "max_position_pct": 0.10, "kelly_mult": 0.8},
