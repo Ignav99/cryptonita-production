@@ -1,0 +1,1 @@
+"""Per-coin trading configuration."""
