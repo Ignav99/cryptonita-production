@@ -154,6 +154,58 @@ class TripleBarrierLabeler:
         df["target"] = (df["label"] == 1).astype(int)
         return df
 
+    def label_for_ternary(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Label for ternary classification:
+          +1 (TP hit)  → target = 1 (LONG)
+           0 (time)    → target = 0 (HOLD)
+          -1 (SL hit)  → target = 2 (SHORT)
+
+        Class mapping:
+          0 = HOLD  (time barrier)
+          1 = LONG  (take profit hit first)
+          2 = SHORT (stop loss hit first — short this coin)
+
+        Returns DataFrame with added 'target' column (0, 1, or 2).
+        """
+        df = self.label(df)
+        # Map: +1→1 (LONG), 0→0 (HOLD), -1→2 (SHORT)
+        label_map = {1: 1, 0: 0, -1: 2}
+        df["target"] = df["label"].map(label_map).fillna(0).astype(int)
+        logger.info(
+            f"Ternary labels: LONG={int((df['target'] == 1).sum())}, "
+            f"HOLD={int((df['target'] == 0).sum())}, "
+            f"SHORT={int((df['target'] == 2).sum())}"
+        )
+        return df
+
+    def get_class_weights(self, df: pd.DataFrame) -> dict:
+        """
+        Compute inverse-frequency class weights for ternary classification.
+        Useful for imbalanced datasets where HOLD >> LONG/SHORT.
+
+        Returns:
+            dict {0: w_hold, 1: w_long, 2: w_short} for use with
+            XGBoost sample_weight, LightGBM class_weight, etc.
+        """
+        if "target" not in df.columns:
+            raise ValueError("DataFrame must have 'target' column. Call label_for_ternary() first.")
+
+        counts = df["target"].value_counts()
+        total = len(df)
+        n_classes = 3
+
+        weights = {}
+        for cls in [0, 1, 2]:
+            count = counts.get(cls, 1)
+            weights[cls] = total / (n_classes * count)
+
+        logger.info(
+            f"Class weights: HOLD(0)={weights[0]:.3f}, "
+            f"LONG(1)={weights[1]:.3f}, SHORT(2)={weights[2]:.3f}"
+        )
+        return weights
+
     def get_stats(self, df: pd.DataFrame) -> Dict:
         """Get labeling statistics"""
         if "label" not in df.columns:

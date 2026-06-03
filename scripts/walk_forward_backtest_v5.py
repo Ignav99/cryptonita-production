@@ -36,11 +36,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.models.ensemble_v5 import EnsembleV5
 from src.models.labeling import TripleBarrierLabeler
 from src.models.validation import PurgedWalkForwardCV
+from src.config.per_coin_config import get_long_threshold, get_short_threshold
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-LONG_THRESHOLD = 0.65   # Optimized via threshold_optimizer_v5.py: maximizes LONG EV (46% WR, +0.678% EV/trade)
+# LONG_THRESHOLD is now per-coin via get_long_threshold() — see per_coin_config.py
+# Kept here only for the report header (uses default/strict value as reference)
+LONG_THRESHOLD = 0.65   # Default strict threshold (per-coin config may override)
 SHORT_THRESHOLD = 0.35  # Fixed: already positive EV (47-52% WR, +0.8% EV/trade)
 TP_RETURN_PCT = 0.05    # 5% gain when TP hit
 SL_RETURN_PCT = 0.03    # 3% loss when SL hit
@@ -370,12 +373,22 @@ def run_backtest_single_ticker(
         logger.error(f"[{ticker}] Training failed: {e}")
         return None
 
+    # Resolve per-coin thresholds.
+    # CSV tickers are in 'BTC-USD' format; per_coin_config uses 'BTCUSDT'.
+    usdt_ticker = ticker.replace("-USD", "USDT")
+    coin_long_threshold = get_long_threshold(usdt_ticker)
+    coin_short_threshold = get_short_threshold(usdt_ticker)
+    logger.info(
+        f"[{ticker}] LONG threshold: {coin_long_threshold}, "
+        f"SHORT threshold: {coin_short_threshold} (usdt_key={usdt_ticker})"
+    )
+
     # Predict on held-out test set (model never saw this)
     try:
         y_pred = model.predict(
             X_test,
-            long_threshold=LONG_THRESHOLD,
-            short_threshold=SHORT_THRESHOLD,
+            long_threshold=coin_long_threshold,
+            short_threshold=coin_short_threshold,
         )
     except Exception as e:
         logger.error(f"[{ticker}] Prediction failed: {e}")
@@ -387,6 +400,8 @@ def run_backtest_single_ticker(
     metrics["train_rows"] = split_idx
     metrics["test_date_start"] = str(coin_df["timestamp"].iloc[split_idx].date())
     metrics["test_date_end"] = str(coin_df["timestamp"].iloc[-1].date())
+    metrics["long_threshold_used"] = coin_long_threshold
+    metrics["short_threshold_used"] = coin_short_threshold
 
     logger.info(
         f"[{ticker}] LONG wr={metrics['long_win_rate']:.1%} "
@@ -455,7 +470,7 @@ def generate_markdown_report(results: List[Dict], output_path: Path) -> None:
         "Zero lookahead. Triple-barrier P&L simulation.",
         "",
         f"- **TP return:** +{TP_RETURN_PCT*100:.0f}%  |  **SL loss:** -{SL_RETURN_PCT*100:.0f}%",
-        f"- **Long threshold:** {LONG_THRESHOLD}  |  **Short threshold:** {SHORT_THRESHOLD}",
+        f"- **Long threshold:** per-coin (disabled=1.0, optimized=0.40-0.45, default={LONG_THRESHOLD})  |  **Short threshold:** {SHORT_THRESHOLD}",
         f"- **Train split:** {int(TRAIN_PCT*100)}% / Test: {int((1-TRAIN_PCT)*100)}%",
         f"- **Tickers tested:** {len(results)}",
         "",

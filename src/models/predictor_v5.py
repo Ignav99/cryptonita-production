@@ -35,7 +35,7 @@ from src.data.coingecko_fetcher import CoinGeckoFetcher
 from src.models.ensemble_v5 import EnsembleV5
 from src.models.regime_detector import RegimeDetector
 from src.models.position_sizer import KellyPositionSizer
-from src.config.per_coin_config import get_long_threshold
+from src.config.per_coin_config import get_long_threshold, get_short_threshold
 
 # Signal constants
 SIGNAL_HOLD = 0
@@ -307,7 +307,13 @@ class TradingPredictorV5:
             lt = long_threshold if long_threshold is not None else coin_lt
             if coin_lt == 1.0 and long_threshold is None:
                 logger.info(f"[V5] {ticker}: LONG disabled by per-coin config")
-            st = short_threshold or self.short_threshold
+
+            # Per-coin SHORT threshold: disabled coins get 1.0 (no SHORT),
+            # optimized coins get a lower threshold to capture alpha.
+            coin_st = get_short_threshold(ticker)
+            st = short_threshold if short_threshold is not None else coin_st
+            if coin_st == 1.0 and short_threshold is None:
+                logger.info(f"[V5] {ticker}: SHORT disabled by per-coin config")
 
             # Get or refresh external data
             if self._cached_external is None:

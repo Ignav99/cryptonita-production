@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from loguru import logger
+import numpy as np
 import pandas as pd
 
 from config import settings
@@ -38,7 +39,7 @@ class TradingBot:
     def __init__(self):
         """Initialize trading bot"""
         logger.info("=" * 60)
-        logger.info("🤖 INITIALIZING CRYPTONITA TRADING BOT V4")
+        logger.info("🤖 INITIALIZING CRYPTONITA TRADING BOT V5")
         logger.info("=" * 60)
 
         # Load configuration from defaults
@@ -48,10 +49,12 @@ class TradingBot:
         self.binance = BinanceService()  # For trading (testnet)
         self.binance_data = BinanceDataService()  # For historical data (production, read-only)
 
-        # V4 Ensemble Predictor
-        from src.models.predictor_v4 import TradingPredictorV4
-        self.predictor = TradingPredictorV4()
-        logger.info("Using V4 Ensemble Predictor")
+        # V5 Ternary Predictor (LONG / SHORT / HOLD)
+        from src.models.predictor_v5 import TradingPredictorV5
+        from src.services.binance_futures_service import BinanceFuturesService
+        self.predictor = TradingPredictorV5()
+        self.binance_futures = BinanceFuturesService()  # For SHORT execution
+        logger.info("Using V5 Ternary Predictor (LONG/SHORT/HOLD)")
 
         self.db = DatabaseManager(settings.get_database_url())
         self.macro_fetcher = MacroDataFetcher()
@@ -444,7 +447,10 @@ class TradingBot:
 
             # 5. Save all signals to database
             total_signals = len(predictions_df)
-            buy_signals = (predictions_df['prediction'] == 1).sum()
+            # V5: signal_class 0=HOLD, 1=LONG, 2=SHORT
+            long_signals = (predictions_df['signal_class'] == 1).sum()
+            short_signals = (predictions_df['signal_class'] == 2).sum()
+            buy_signals = long_signals + short_signals  # Keep for DB compat
 
             for _, row in predictions_df.iterrows():
                 features = row['features']
@@ -452,15 +458,21 @@ class TradingBot:
                 rejection_reason = None
                 if isinstance(features, dict):
                     rejection_reason = features.pop('_rejection_reason', None)
+                # V5 uses signal_name instead of signal_type; probability = max(p_long, p_short)
+                signal_name = row.get('signal_name', 'HOLD')
+                probability = max(row.get('p_long', 0.0), row.get('p_short', 0.0)) if signal_name != 'HOLD' else 0.0
                 self.db.save_signal(
                     ticker=row['ticker'],
-                    signal_type=row['signal_type'],
-                    probability=row['probability'],
+                    signal_type=signal_name,
+                    probability=probability,
                     features=features,
                     rejection_reason=rejection_reason,
                 )
 
-            logger.info(f"📊 Signals: {buy_signals} BUY / {total_signals} total")
+            logger.info(
+                f"📊 Signals: {long_signals} LONG / {short_signals} SHORT / "
+                f"{total_signals - long_signals - short_signals} HOLD / {total_signals} total"
+            )
 
             # 6. Update bot status (convert numpy types to Python types)
             self.db.update_bot_status(
@@ -471,7 +483,7 @@ class TradingBot:
                 last_error=None
             )
 
-            # 7. Get top buy signals
+            # 7. Get top signals (LONG + SHORT, V5 compatible)
             top_signals = self.predictor.get_top_signals(predictions_df, top_n=10)
 
             # 8. Execute trades if auto-trading enabled
@@ -535,8 +547,11 @@ class TradingBot:
         entry_price = position['entry_price']
         current_price = position.get('current_price', entry_price)
 
-        # 1. Current unrealized PnL %
-        pnl_pct = (current_price - entry_price) / entry_price if entry_price > 0 else 0
+        # 1. Current unrealized PnL % — inverted for SHORT
+        if position.get('position_type', 'long') == 'short':
+            pnl_pct = (entry_price - current_price) / entry_price if entry_price > 0 else 0
+        else:
+            pnl_pct = (current_price - entry_price) / entry_price if entry_price > 0 else 0
 
         # 2. Remaining upside to next unfilled TP
         remaining_upside = 0
@@ -700,7 +715,12 @@ class TradingBot:
             fresh_price = self.binance.get_current_price(ticker)
             if fresh_price:
                 pos['current_price'] = fresh_price
-            pnl_pct = (pos.get('current_price', pos['entry_price']) - pos['entry_price']) / pos['entry_price']
+            _cp = pos.get('current_price', pos['entry_price'])
+            _ep = pos['entry_price']
+            if pos.get('position_type', 'long') == 'short':
+                pnl_pct = (_ep - _cp) / _ep if _ep > 0 else 0
+            else:
+                pnl_pct = (_cp - _ep) / _ep if _ep > 0 else 0
 
             # Only apply to underwater positions (negative PnL)
             if pnl_pct >= 0:
@@ -724,7 +744,11 @@ class TradingBot:
         """Force close any single position down more than MAX_LOSS without recovery."""
         for ticker, pos in list(self.positions.items()):
             current_price = pos.get('current_price', pos['entry_price'])
-            pnl_pct = (current_price - pos['entry_price']) / pos['entry_price']
+            _ep = pos['entry_price']
+            if pos.get('position_type', 'long') == 'short':
+                pnl_pct = (_ep - current_price) / _ep if _ep > 0 else 0
+            else:
+                pnl_pct = (current_price - _ep) / _ep if _ep > 0 else 0
 
             if pnl_pct <= -settings.SINGLE_POSITION_MAX_LOSS_PCT:
                 logger.warning(f"🛑 {ticker} down {pnl_pct*100:.1f}% — exceeds max single loss, FORCE CLOSE")
@@ -802,11 +826,22 @@ class TradingBot:
         # 3. Check if we should trade
         current_positions = len(self.positions)
         rotation_attempted = False
+
+        # V5: extract signal_class + build proba_3 array
+        signal_class = signal.get('signal_class', 1)  # Default to LONG if missing (backward compat)
+        signal_name = signal.get('signal_name', 'LONG')
+        proba_3 = np.array([
+            signal.get('p_hold', 0.0),
+            signal.get('p_long', 0.0),
+            signal.get('p_short', 0.0),
+        ])
+
         should_trade, reason = self.predictor.should_trade(
             ticker=ticker,
-            probability=probability,
+            signal_class=signal_class,
+            proba_3=proba_3,
             current_positions=current_positions,
-            daily_loss=self.daily_loss
+            daily_loss=self.daily_loss,
         )
 
         # 3b. If blocked by max positions, attempt smart rotation
@@ -818,19 +853,23 @@ class TradingBot:
                 portfolio = self.db.get_portfolio()
                 available_balance = portfolio['available_balance']
                 should_trade, reason = self.predictor.should_trade(
-                    ticker=ticker, probability=probability,
-                    current_positions=len(self.positions), daily_loss=self.daily_loss
+                    ticker=ticker,
+                    signal_class=signal_class,
+                    proba_3=proba_3,
+                    current_positions=len(self.positions),
+                    daily_loss=self.daily_loss,
                 )
 
         if not should_trade:
             logger.warning(f"⚠️ Trade blocked: {reason}")
             return
 
-        # 4. Calculate position size (V4 uses ticker + confidence for sizing)
+        # 4. Calculate position size (V5 uses signal_class + proba_3)
         position_info = self.predictor.calculate_position_size(
             current_price=current_price,
             portfolio_value=portfolio_value,
-            probability=probability,
+            signal_class=signal_class,
+            proba_3=proba_3,
             ticker=ticker,
         )
 
@@ -878,12 +917,18 @@ class TradingBot:
 
         logger.info(f"💰 Position: {quantity} {ticker} = ${usd_value:.2f}")
 
-        # 5. Execute buy order on Binance
-        logger.info(f"🛒 Executing BUY order: {ticker}")
-        order = self.binance.create_market_buy_order(ticker, quantity)
+        # 5. Execute order — branch on signal_class (1=LONG spot, 2=SHORT futures)
+        if signal_class == 2:  # SHORT via Binance Futures
+            logger.info(f"🔻 Executing SHORT (Futures): {ticker}")
+            order = self.binance_futures.open_short(ticker, quantity)
+            position_type = 'short'
+        else:  # LONG via Spot (default, preserves original V4 flow)
+            logger.info(f"🛒 Executing BUY (Spot): {ticker}")
+            order = self.binance.create_market_buy_order(ticker, quantity)
+            position_type = 'long'
 
         if order is None:
-            logger.error(f"❌ Buy order failed for {ticker}")
+            logger.error(f"❌ Order failed for {ticker} ({signal_name})")
             return
 
         # 6. Get actual executed price
@@ -891,7 +936,7 @@ class TradingBot:
         executed_qty = float(order['executedQty'])
         executed_value = executed_price * executed_qty
 
-        logger.success(f"✅ BUY executed: {executed_qty} {ticker} @ ${executed_price:.2f}")
+        logger.success(f"✅ {signal_name} executed: {executed_qty} {ticker} @ ${executed_price:.2f}")
 
         # 6.5 Deduct from available balance
         if not self.db.deduct_from_balance(executed_value, ticker):
@@ -913,48 +958,71 @@ class TradingBot:
             confidence=confidence,
         )
 
-        # 8. Place OCO order for TP1 (first take profit level)
-        # We'll manage TP2, TP3 and trailing stop dynamically in monitoring
-        logger.info(
-            f"🎯 Dynamic TP/SL: SL=${tp_sl['stop_loss']:.4f} (-{tp_sl['stop_loss_pct']*100:.1f}%) | "
-            f"TP1=${tp_sl['tp1']:.4f} (+{tp_sl['tp1_pct']*100:.1f}%) | "
-            f"TP2=${tp_sl['tp2']:.4f} (+{tp_sl['tp2_pct']*100:.1f}%) | "
-            f"TP3=${tp_sl['tp3']:.4f} (+{tp_sl['tp3_pct']*100:.1f}%)"
-        )
-
-        # Place OCO for first TP level (30% of position)
-        oco_quantity = executed_qty * tp_sl['tp1_size']
-        oco_quantity = self.binance.round_quantity(ticker, oco_quantity)
-
-        # Round prices to avoid Binance precision errors
-        tp_price = self.binance.round_price(ticker, tp_sl['tp1'])
-        sl_price = self.binance.round_price(ticker, tp_sl['stop_loss'])
-        sl_limit_price = self.binance.round_price(ticker, tp_sl['stop_loss'] * 0.99)
-
-        oco_order = self.binance.create_oco_order(
-            symbol=ticker,
-            quantity=oco_quantity,
-            price=tp_price,
-            stop_price=sl_price,
-            stop_limit_price=sl_limit_price
-        )
-
-        if oco_order:
-            logger.success(f"✅ OCO order placed for {ticker} (TP1: 30% position)")
-
-        # 8b. Place STOP_LOSS_LIMIT for remaining 70% (server-side protection)
-        remaining_qty = executed_qty - oco_quantity
-        remaining_qty = self.binance.round_quantity(ticker, remaining_qty)
-        if remaining_qty > 0:
-            sl_order = self.binance.create_stop_limit_order(
-                symbol=ticker,
-                side='SELL',
-                quantity=remaining_qty,
-                stop_price=sl_price,
-                limit_price=sl_limit_price,
+        # 8. TP/SL levels — for SHORT, invert the percentages
+        if position_type == 'short':
+            # SHORT: TP is below entry, SL is above entry
+            tp1_price = executed_price * (1 - tp_sl['tp1_pct'])
+            tp2_price = executed_price * (1 - tp_sl['tp2_pct'])
+            tp3_price = executed_price * (1 - tp_sl['tp3_pct'])
+            sl_price_raw = executed_price * (1 + tp_sl['stop_loss_pct'])
+            logger.info(
+                f"🎯 SHORT TP/SL: SL=${sl_price_raw:.4f} (+{tp_sl['stop_loss_pct']*100:.1f}%) | "
+                f"TP1=${tp1_price:.4f} (-{tp_sl['tp1_pct']*100:.1f}%) | "
+                f"TP2=${tp2_price:.4f} (-{tp_sl['tp2_pct']*100:.1f}%) | "
+                f"TP3=${tp3_price:.4f} (-{tp_sl['tp3_pct']*100:.1f}%)"
             )
-            if sl_order:
-                logger.success(f"✅ SL order placed for {ticker} remaining 70% ({remaining_qty})")
+            # Override tp_sl dict with correct SHORT levels
+            tp_sl = {
+                **tp_sl,
+                'tp1': tp1_price,
+                'tp2': tp2_price,
+                'tp3': tp3_price,
+                'stop_loss': sl_price_raw,
+            }
+            # SHORT: SL management handled by monitoring loop (Futures doesn't use Spot OCO)
+            logger.info(f"ℹ️ SHORT position: SL/TP will be managed via monitoring loop (no Spot OCO)")
+        else:
+            # LONG: original OCO + SL flow
+            logger.info(
+                f"🎯 Dynamic TP/SL: SL=${tp_sl['stop_loss']:.4f} (-{tp_sl['stop_loss_pct']*100:.1f}%) | "
+                f"TP1=${tp_sl['tp1']:.4f} (+{tp_sl['tp1_pct']*100:.1f}%) | "
+                f"TP2=${tp_sl['tp2']:.4f} (+{tp_sl['tp2_pct']*100:.1f}%) | "
+                f"TP3=${tp_sl['tp3']:.4f} (+{tp_sl['tp3_pct']*100:.1f}%)"
+            )
+
+            # Place OCO for first TP level (30% of position)
+            oco_quantity = executed_qty * tp_sl['tp1_size']
+            oco_quantity = self.binance.round_quantity(ticker, oco_quantity)
+
+            # Round prices to avoid Binance precision errors
+            tp_price = self.binance.round_price(ticker, tp_sl['tp1'])
+            sl_price = self.binance.round_price(ticker, tp_sl['stop_loss'])
+            sl_limit_price = self.binance.round_price(ticker, tp_sl['stop_loss'] * 0.99)
+
+            oco_order = self.binance.create_oco_order(
+                symbol=ticker,
+                quantity=oco_quantity,
+                price=tp_price,
+                stop_price=sl_price,
+                stop_limit_price=sl_limit_price
+            )
+
+            if oco_order:
+                logger.success(f"✅ OCO order placed for {ticker} (TP1: 30% position)")
+
+            # 8b. Place STOP_LOSS_LIMIT for remaining 70% (server-side protection)
+            remaining_qty = executed_qty - oco_quantity
+            remaining_qty = self.binance.round_quantity(ticker, remaining_qty)
+            if remaining_qty > 0:
+                sl_order = self.binance.create_stop_limit_order(
+                    symbol=ticker,
+                    side='SELL',
+                    quantity=remaining_qty,
+                    stop_price=sl_price,
+                    limit_price=sl_limit_price,
+                )
+                if sl_order:
+                    logger.success(f"✅ SL order placed for {ticker} remaining 70% ({remaining_qty})")
 
         # 9. Log trade to database
         # Get signal_id from the most recent signal for this ticker
@@ -968,7 +1036,7 @@ class TradingBot:
         trade_id = self.db.save_trade(
             signal_id=signal_id,
             ticker=ticker,
-            action='BUY',
+            action=signal_name,  # 'LONG' or 'SHORT' (V5), replaces always-'BUY'
             quantity=executed_qty,
             price=executed_price,
             total_value=executed_value,
@@ -1024,6 +1092,7 @@ class TradingBot:
             'trade_id': trade_id,
             'entry_time': datetime.utcnow(),
             'entry_probability': probability,
+            'position_type': position_type,  # 'long' or 'short'
         }
 
         # 10b. Initialize lifecycle state
@@ -1037,7 +1106,7 @@ class TradingBot:
 
         # 11. Telegram notification
         await self.notifier.notify_trade(
-            action="BUY", ticker=ticker, price=executed_price,
+            action=signal_name, ticker=ticker, price=executed_price,
             quantity=executed_qty, usd_value=executed_value,
             confidence=confidence, probability=probability,
         )
@@ -1093,11 +1162,17 @@ class TradingBot:
                 # Update position
                 position['current_price'] = current_price
 
-                # 2. Calculate P&L
-                pnl = (current_price - position['entry_price']) * position['remaining_quantity']
-                pnl_pct = ((current_price - position['entry_price']) / position['entry_price']) * 100
+                # 2. Calculate P&L — inverted for SHORT positions
+                pos_type = position.get('position_type', 'long')
+                entry_price_pos = position['entry_price']
+                if pos_type == 'short':
+                    pnl_pct_raw = (entry_price_pos - current_price) / entry_price_pos
+                else:
+                    pnl_pct_raw = (current_price - entry_price_pos) / entry_price_pos
+                pnl = pnl_pct_raw * position['remaining_quantity'] * entry_price_pos
+                pnl_pct = pnl_pct_raw * 100
 
-                logger.debug(f"  {ticker}: ${current_price:.2f} | P&L: ${pnl:.2f} ({pnl_pct:+.2f}%)")
+                logger.debug(f"  {ticker} ({pos_type}): ${current_price:.2f} | P&L: ${pnl:.2f} ({pnl_pct:+.2f}%)")
 
                 # 3. Get current market features for intelligent exit
                 try:
@@ -1225,9 +1300,28 @@ class TradingBot:
                                 f"(reason={exit_decision['reason']})"
                             )
 
-                # 7. Check basic TP/SL (in case OCO failed)
-                if current_price <= position['stop_loss']:
-                    logger.warning(f"🛑 {ticker} STOP LOSS hit: ${current_price:.2f} <= ${position['stop_loss']:.2f}")
+                # 7. Check basic TP/SL (in case OCO failed / for SHORT monitoring)
+                pos_type_mon = position.get('position_type', 'long')
+                sl_triggered = False
+                if pos_type_mon == 'short':
+                    # SHORT SL: price rose above stop-loss level
+                    if current_price >= position['stop_loss']:
+                        logger.warning(f"🛑 {ticker} SHORT STOP LOSS hit: ${current_price:.2f} >= ${position['stop_loss']:.2f}")
+                        sl_triggered = True
+                    # SHORT TP1: price fell below tp1
+                    elif not position.get('tp1_hit') and position.get('tp1') and current_price <= position['tp1']:
+                        logger.info(f"🎯 {ticker} SHORT TP1 hit: ${current_price:.2f} <= ${position['tp1']:.2f}")
+                        exit_qty = position['remaining_quantity'] * position.get('tp1_size', 0.30)
+                        await self._execute_exit(ticker, exit_qty, current_price, 'tp1_short')
+                        position['remaining_quantity'] = max(0.0, position['remaining_quantity'] - exit_qty)
+                        position['tp1_hit'] = True
+                else:
+                    # LONG SL: price fell below stop-loss level
+                    if current_price <= position['stop_loss']:
+                        logger.warning(f"🛑 {ticker} STOP LOSS hit: ${current_price:.2f} <= ${position['stop_loss']:.2f}")
+                        sl_triggered = True
+
+                if sl_triggered:
                     await self._execute_exit(ticker, position['remaining_quantity'], current_price, 'stop_loss')
                     del self.positions[ticker]
                     self.db.delete_position(ticker)
@@ -1290,17 +1384,23 @@ class TradingBot:
                 self.db.delete_position(ticker)
                 return
 
-            logger.info(f"💰 Executing SELL: {quantity} {ticker} @ ${price:.4f}")
+            # Determine position type (default to 'long' for backward compat)
+            pos_type = 'long'
+            if ticker in self.positions:
+                pos_type = self.positions[ticker].get('position_type', 'long')
+
+            logger.info(f"💰 Executing EXIT ({pos_type.upper()}): {quantity} {ticker} @ ${price:.4f}")
 
             # Get entry price for P&L calculation
             entry_price = price  # Default
             if ticker in self.positions:
                 entry_price = self.positions[ticker].get('entry_price', price)
 
-            # Cancel all open orders for this ticker before selling
-            cancelled = self.binance.cancel_all_open_orders(ticker)
-            if cancelled > 0:
-                logger.info(f"🗑️ Cancelled {cancelled} open orders for {ticker}")
+            # Cancel all open spot orders before exit (only relevant for LONG)
+            if pos_type == 'long':
+                cancelled = self.binance.cancel_all_open_orders(ticker)
+                if cancelled > 0:
+                    logger.info(f"🗑️ Cancelled {cancelled} open orders for {ticker}")
 
             # Round quantity
             quantity = self.binance.round_quantity(ticker, quantity)
@@ -1311,18 +1411,24 @@ class TradingBot:
                 self.db.delete_position(ticker)
                 return
 
-            # Execute market sell
-            order = self.binance.create_market_sell_order(ticker, quantity)
+            # Execute market close — Spot sell for LONG, Futures close_short for SHORT
+            if pos_type == 'short':
+                order = self.binance_futures.close_short(ticker, quantity)
+            else:
+                order = self.binance.create_market_sell_order(ticker, quantity)
 
             if order:
                 executed_price = float(order.get('fills', [{}])[0].get('price', price))
                 executed_qty = float(order['executedQty'])
                 executed_value = executed_price * executed_qty
 
-                # Calculate P&L for this sale
-                sale_pnl = (executed_price - entry_price) * executed_qty
+                # Calculate P&L — inverted for SHORT (profit when price falls)
+                if pos_type == 'short':
+                    sale_pnl = (entry_price - executed_price) * executed_qty
+                else:
+                    sale_pnl = (executed_price - entry_price) * executed_qty
 
-                logger.success(f"✅ SELL executed: {executed_qty} {ticker} @ ${executed_price:.2f} | P&L: ${sale_pnl:+.2f} | Reason: {reason}")
+                logger.success(f"✅ EXIT executed ({pos_type.upper()}): {executed_qty} {ticker} @ ${executed_price:.2f} | P&L: ${sale_pnl:+.2f} | Reason: {reason}")
 
                 # Telegram notification
                 await self.notifier.notify_trade(
