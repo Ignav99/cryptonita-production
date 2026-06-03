@@ -183,7 +183,10 @@ async def startup_event():
             INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
         """)
         realized_pnl = float(pnl_df.iloc[0]['realized_pnl'])
-        available = 10000.0 + realized_pnl - real_invested
+        # Read initial_capital from DB — never hardcode, respects soft-reset
+        portfolio_df = db.execute_query("SELECT initial_capital FROM portfolio WHERE id = 1")
+        initial_capital = float(portfolio_df.iloc[0]['initial_capital']) if not portfolio_df.empty else 10000.0
+        available = initial_capital + realized_pnl - real_invested
         db.execute_command("""
             UPDATE portfolio SET available_balance = :a, total_invested = :i,
                 realized_pnl = :p, last_update = NOW() WHERE id = 1

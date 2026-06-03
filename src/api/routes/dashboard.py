@@ -532,7 +532,9 @@ async def recalibrate_portfolio(current_user: dict = Depends(get_current_user)):
     Fixes desynchronized available_balance, total_invested, and realized_pnl.
     """
     try:
-        initial_capital = 10000.0
+        # Read initial_capital from DB — never hardcode, respects soft-reset
+        portfolio = db.get_portfolio()
+        initial_capital = portfolio['initial_capital']
 
         # 1. Real invested = sum of (remaining_qty * avg_buy_price) for open positions
         invested_df = db.execute_query("""
