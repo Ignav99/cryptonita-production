@@ -437,6 +437,7 @@ async def soft_reset(current_user: dict = Depends(get_current_user)):
             bot_manager.stop(reason="Soft reset requested")
 
         with db.engine.connect() as conn:
+            conn.execute(text("UPDATE trades SET signal_id = NULL WHERE signal_id IS NOT NULL"))
             conn.execute(text("DELETE FROM positions"))
             conn.execute(text("DELETE FROM signals"))
 
