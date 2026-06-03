@@ -159,41 +159,31 @@ async def startup_event():
         db = DatabaseManager(settings.get_database_url())
         db.ensure_lifecycle_schema()
 
-        # Recalibrate portfolio from real trades/positions
+        # Sync portfolio invested amount from real open positions (startup only).
+        # We trust the stored realized_pnl and initial_capital — do NOT recalculate
+        # PnL from all trades, which would corrupt balances set by soft-reset.
         invested_df = db.execute_query("""
             SELECT COALESCE(SUM(remaining_quantity * avg_buy_price), 0) as real_invested
             FROM positions WHERE remaining_quantity > 0.0001
         """)
         real_invested = float(invested_df.iloc[0]['real_invested'])
-        pnl_df = db.execute_query("""
-            WITH numbered_buys AS (
-                SELECT ticker, price, quantity,
-                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'BUY' AND status = 'executed'
-            ),
-            numbered_sells AS (
-                SELECT ticker, price, quantity,
-                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'SELL' AND status = 'executed'
-            )
-            SELECT COALESCE(SUM(
-                (s.price - b.price) * LEAST(b.quantity, s.quantity)
-            ), 0) as realized_pnl
-            FROM numbered_buys b
-            INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
-        """)
-        realized_pnl = float(pnl_df.iloc[0]['realized_pnl'])
-        # Read initial_capital from DB — never hardcode, respects soft-reset
-        portfolio_df = db.execute_query("SELECT initial_capital FROM portfolio WHERE id = 1")
-        initial_capital = float(portfolio_df.iloc[0]['initial_capital']) if not portfolio_df.empty else 10000.0
+        portfolio_df = db.execute_query(
+            "SELECT initial_capital, realized_pnl FROM portfolio WHERE id = 1"
+        )
+        if not portfolio_df.empty:
+            initial_capital = float(portfolio_df.iloc[0]['initial_capital'])
+            realized_pnl = float(portfolio_df.iloc[0]['realized_pnl'])
+        else:
+            initial_capital = 10000.0
+            realized_pnl = 0.0
         available = initial_capital + realized_pnl - real_invested
         db.execute_command("""
             UPDATE portfolio SET available_balance = :a, total_invested = :i,
-                realized_pnl = :p, last_update = NOW() WHERE id = 1
-        """, {'a': round(available, 2), 'i': round(real_invested, 2), 'p': round(realized_pnl, 2)})
-        # Clean dust
+                last_update = NOW() WHERE id = 1
+        """, {'a': round(available, 2), 'i': round(real_invested, 2)})
+        # Clean dust positions
         db.execute_command("DELETE FROM positions WHERE remaining_quantity <= 0.0001 AND remaining_quantity IS NOT NULL")
-        logger.info(f"Portfolio recalibrated: available=${available:.2f}, invested=${real_invested:.2f}, pnl=${realized_pnl:.2f}")
+        logger.info(f"Portfolio synced on startup: available=${available:.2f}, invested=${real_invested:.2f}, pnl=${realized_pnl:.2f}")
 
         db.close()
         logger.info("Lifecycle schema ensured")
