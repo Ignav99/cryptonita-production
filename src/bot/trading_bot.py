@@ -269,10 +269,26 @@ class TradingBot:
         """Start the trading bot"""
         logger.info("🚀 Starting trading bot...")
 
-        # Test Binance connection
-        if not self.binance.test_connectivity():
-            logger.error("❌ Failed to connect to Binance. Aborting.")
-            return
+        # Test Binance connection (retry for testnet 502s)
+        MAX_ATTEMPTS = 3
+        RETRY_DELAY = 60  # seconds
+        connected = False
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            if self.binance.test_connectivity():
+                connected = True
+                break
+            if attempt < MAX_ATTEMPTS:
+                logger.warning(
+                    f"⚠️ Binance connection attempt {attempt}/{MAX_ATTEMPTS} failed. "
+                    f"Retrying in {RETRY_DELAY}s..."
+                )
+                await asyncio.sleep(RETRY_DELAY)
+
+        if not connected:
+            logger.warning(
+                "⚠️ Binance testnet unreachable after 3 attempts — "
+                "running in scan-only mode (trade execution disabled)"
+            )
 
         # Update bot status
         self.db.update_bot_status(
