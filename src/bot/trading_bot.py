@@ -11,7 +11,7 @@ Main trading bot implementation with:
 
 import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from loguru import logger
 import numpy as np
@@ -72,6 +72,7 @@ class TradingBot:
 
         # Bot state
         self.is_running = False
+        self._binance_connected = False  # set after connectivity check in start()
         self.cycle_number = 0
         self.daily_loss = 0.0
         self.last_scan_time = None
@@ -284,6 +285,7 @@ class TradingBot:
                 )
                 await asyncio.sleep(RETRY_DELAY)
 
+        self._binance_connected = connected
         if not connected:
             logger.warning(
                 "⚠️ Binance testnet unreachable after 3 attempts — "
@@ -306,6 +308,7 @@ class TradingBot:
             asyncio.create_task(self._market_scan_loop()),
             asyncio.create_task(self._position_monitoring_loop()),
             asyncio.create_task(self._binance_sync_loop()),
+            asyncio.create_task(self._binance_reconnect_loop()),
         ]
 
         # Add auto-training loop if enabled and using V4
@@ -787,10 +790,28 @@ class TradingBot:
             except Exception as e:
                 logger.error(f"❌ Failed to execute trade for {signal['ticker']}: {e}")
 
+    async def _binance_reconnect_loop(self):
+        """Periodically retry Binance connection when in scan-only mode."""
+        RECONNECT_INTERVAL = 30 * 60  # check every 30 minutes
+        while self.is_running:
+            await asyncio.sleep(RECONNECT_INTERVAL)
+            if self._binance_connected:
+                continue
+            logger.info("🔄 Attempting Binance reconnection...")
+            if self.binance.test_connectivity():
+                self._binance_connected = True
+                logger.success("✅ Binance reconnected — trading re-enabled")
+            else:
+                logger.warning("⚠️ Binance still unreachable, staying in scan-only mode")
+
     async def _execute_trade(self, signal: pd.Series):
         """Execute a single trade"""
         ticker = signal['ticker']
         probability = signal['probability']
+
+        if not self._binance_connected:
+            logger.warning(f"⚠️ Trade skipped ({ticker}): Binance not connected (scan-only mode)")
+            return
 
         logger.info(f"💵 Evaluating trade: {ticker} (p={probability:.4f})")
 
@@ -1655,7 +1676,11 @@ class TradingBot:
                 if last_trained:
                     if isinstance(last_trained, str):
                         last_trained = datetime.fromisoformat(last_trained)
-                    days_since = (datetime.utcnow() - last_trained).total_seconds() / 86400
+                    if last_trained.tzinfo is not None:
+                        now = datetime.now(timezone.utc)
+                    else:
+                        now = datetime.utcnow()
+                    days_since = (now - last_trained).total_seconds() / 86400
                     if days_since < interval_days:
                         logger.info(f"Auto-training: last trained {days_since:.1f}d ago, next in {interval_days - days_since:.1f}d")
                         await asyncio.sleep(3600)  # Check again in 1h
