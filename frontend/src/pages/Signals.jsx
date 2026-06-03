@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Signal, BarChart3, TrendingUp, Target, Activity, ArrowUp, ArrowDown, Minus } from 'lucide-react';
+import { Signal, BarChart3, TrendingUp, TrendingDown, Target, Activity, ArrowUp, ArrowDown, Minus } from 'lucide-react';
 import { dashboard } from '../api/client';
 import Card from '../components/ui/Card';
 import DataTable from '../components/ui/DataTable';
@@ -25,6 +25,26 @@ function TrendArrow({ direction }) {
   if (direction === 'up') return <ArrowUp className="w-3.5 h-3.5 text-accent-green" />;
   if (direction === 'down') return <ArrowDown className="w-3.5 h-3.5 text-accent-red" />;
   return <Minus className="w-3.5 h-3.5 text-text-secondary" />;
+}
+
+// V5 signal badge — handles both V4 (BUY/SELL) and V5 (LONG/SHORT/HOLD)
+function SignalBadge({ signalName, signalType, rejectionReason, probability }) {
+  const raw = (signalName || signalType || 'HOLD').toUpperCase();
+
+  if (raw === 'HOLD' && rejectionReason === 'above_ceiling') {
+    return (
+      <Badge variant="warning" title={`Prob ${probability != null ? (probability * 100).toFixed(1) : '?'}% exceeds ceiling`}>
+        CEILING
+      </Badge>
+    );
+  }
+  if (raw === 'LONG' || raw === 'BUY') {
+    return <Badge variant="success">▲ LONG</Badge>;
+  }
+  if (raw === 'SHORT' || raw === 'SELL') {
+    return <Badge variant="danger">▼ SHORT</Badge>;
+  }
+  return <Badge variant="neutral">— HOLD</Badge>;
 }
 
 function DistanceBadge({ value }) {
@@ -79,13 +99,22 @@ export default function Signals() {
   });
 
   // Filtered data
-  const filteredSignals = signals?.filter((s) => {
-    if (signalFilter !== 'ALL' && s.signal_type !== signalFilter) return false;
-    return true;
-  });
+  // Match filter against both V4 (signal_type: BUY) and V5 (signal_name: LONG/SHORT)
+  const signalMatches = (type, name) => {
+    const t = (type || '').toUpperCase();
+    const n = (name || '').toUpperCase();
+    if (signalFilter === 'LONG') return t === 'LONG' || t === 'BUY' || n === 'LONG';
+    if (signalFilter === 'SHORT') return t === 'SHORT' || t === 'SELL' || n === 'SHORT';
+    if (signalFilter === 'HOLD') return t === 'HOLD' || n === 'HOLD';
+    return true; // ALL
+  };
+
+  const filteredSignals = signals?.filter((s) =>
+    signalFilter === 'ALL' || signalMatches(s.signal_type, s.signal_name)
+  );
 
   const filteredCoins = coins?.filter((c) => {
-    if (signalFilter !== 'ALL' && c.latest_signal_type !== signalFilter) return false;
+    if (signalFilter !== 'ALL' && !signalMatches(c.latest_signal_type, c.latest_signal_name)) return false;
     if (tierFilter !== 'ALL' && c.tier !== Number(tierFilter)) return false;
     return true;
   });
@@ -105,20 +134,14 @@ export default function Signals() {
     {
       key: 'latest_signal_type',
       label: 'Signal',
-      render: (v, row) => {
-        if (v === 'HOLD' && row.latest_rejection_reason === 'above_ceiling') {
-          return (
-            <Badge variant="warning" title={`Prob ${(row.latest_probability * 100).toFixed(1)}% exceeds ceiling — overfit zone`}>
-              CEILING
-            </Badge>
-          );
-        }
-        return (
-          <Badge variant={v === 'BUY' ? 'success' : v === 'SELL' ? 'danger' : 'neutral'}>
-            {v}
-          </Badge>
-        );
-      },
+      render: (v, row) => (
+        <SignalBadge
+          signalName={row.latest_signal_name}
+          signalType={v}
+          rejectionReason={row.latest_rejection_reason}
+          probability={row.latest_probability}
+        />
+      ),
     },
     {
       key: 'latest_probability',
@@ -172,20 +195,14 @@ export default function Signals() {
     {
       key: 'signal_type',
       label: 'Signal',
-      render: (v, row) => {
-        if (v === 'HOLD' && row.rejection_reason === 'above_ceiling') {
-          return (
-            <Badge variant="warning" title={`Prob ${(row.probability * 100).toFixed(1)}% exceeds ceiling — overfit zone`}>
-              CEILING
-            </Badge>
-          );
-        }
-        return (
-          <Badge variant={v === 'BUY' ? 'success' : v === 'SELL' ? 'danger' : 'neutral'}>
-            {v}
-          </Badge>
-        );
-      },
+      render: (v, row) => (
+        <SignalBadge
+          signalName={row.signal_name}
+          signalType={v}
+          rejectionReason={row.rejection_reason}
+          probability={row.probability}
+        />
+      ),
     },
     {
       key: 'probability',
@@ -254,19 +271,19 @@ export default function Signals() {
           icon={Activity}
         />
         <StatCard
-          label="BUY Signals"
+          label="LONG Signals"
           value={summary?.buy_signals_count ?? '—'}
-          icon={Signal}
+          icon={TrendingUp}
         />
         <StatCard
-          label="Near Threshold"
-          value={summary?.near_threshold_count ?? '—'}
-          icon={Target}
+          label="SHORT Signals"
+          value={summary?.short_signals_count ?? '—'}
+          icon={TrendingDown}
         />
         <StatCard
           label="Avg Probability"
           value={summary?.avg_probability != null ? `${(summary.avg_probability * 100).toFixed(1)}%` : '—'}
-          icon={TrendingUp}
+          icon={Target}
         />
       </div>
 
@@ -300,7 +317,7 @@ export default function Signals() {
               icon={BarChart3}
               headerRight={
                 <div className="flex gap-1">
-                  {['ALL', 'BUY', 'HOLD'].map((f) => (
+                  {['ALL', 'LONG', 'SHORT', 'HOLD'].map((f) => (
                     <button
                       key={f}
                       onClick={() => setSignalFilter(f)}

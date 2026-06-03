@@ -59,7 +59,7 @@ services:
         value: redis://localhost:6379/0
 
       - key: INITIAL_CAPITAL
-        value: 10000
+        value: 3000
 
       - key: MAX_POSITION_SIZE_USD
         value: 500
@@ -77,7 +77,7 @@ services:
         value: INFO
 
       - key: USE_V4_MODEL
-        value: "true"
+        value: "false"
 
       - key: AUTO_TRAIN_ENABLED
         value: "true"

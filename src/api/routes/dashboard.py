@@ -93,12 +93,17 @@ async def get_signals_summary(current_user: dict = Depends(get_current_user)):
         logger.info(f"📊 /signals/summary: found {len(latest_df)} latest signals")
         if len(latest_df) == 0:
             return SignalsSummaryStats(
-                total_coins_scanned=0, buy_signals_count=0, hold_signals_count=0,
-                near_threshold_count=0, avg_probability=0.0,
+                total_coins_scanned=0, buy_signals_count=0, short_signals_count=0,
+                hold_signals_count=0, near_threshold_count=0, avg_probability=0.0,
             )
 
-        buy_count = int((latest_df['signal_type'] == 'BUY').sum())
-        hold_count = int((latest_df['signal_type'] == 'HOLD').sum())
+        # V4: signal_type = BUY/HOLD | V5: signal_type = LONG/SHORT/HOLD (via signal_name)
+        signal_name_col = latest_df.get('signal_name', latest_df['signal_type'] if 'signal_type' in latest_df.columns else None)
+        effective_type = signal_name_col if signal_name_col is not None else latest_df['signal_type']
+
+        buy_count = int(effective_type.str.upper().isin(['BUY', 'LONG']).sum())
+        short_count = int(effective_type.str.upper().isin(['SELL', 'SHORT']).sum())
+        hold_count = int(effective_type.str.upper().isin(['HOLD']).sum())
 
         near_count = 0
         for _, row in latest_df.iterrows():
@@ -114,6 +119,7 @@ async def get_signals_summary(current_user: dict = Depends(get_current_user)):
         return SignalsSummaryStats(
             total_coins_scanned=len(latest_df),
             buy_signals_count=buy_count,
+            short_signals_count=short_count,
             hold_signals_count=hold_count,
             near_threshold_count=near_count,
             avg_probability=round(avg_prob, 4),

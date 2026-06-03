@@ -2,12 +2,14 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Wallet,
   TrendingUp,
+  TrendingDown,
   Target,
   Briefcase,
   Play,
   Square,
   Pause,
   Signal,
+  Cpu,
 } from 'lucide-react';
 import { controls, dashboard } from '../api/client';
 import { useDashboard } from '../context/DashboardContext';
@@ -51,8 +53,19 @@ export default function Overview() {
   const winRate = stats?.win_rate;
   const openCount = stats?.active_positions ?? stats?.open_positions ?? 0;
 
+  const longWinRate = stats?.long_win_rate;
+  const shortWinRate = stats?.short_win_rate;
+
   return (
     <div className="space-y-6">
+      {/* V5 Model Badge */}
+      <div className="flex items-center gap-2">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-purple-900/40 text-purple-400 border border-purple-800">
+          <Cpu className="w-3 h-3" /> V5 Ternary · LONG / SHORT / HOLD
+        </span>
+        <span className="text-xs text-text-secondary">• SHORT via Binance Futures · Per-coin models</span>
+      </div>
+
       {/* Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Balance" value={balance != null ? Number(balance).toFixed(2) : '—'} prefix="$" icon={Wallet} />
@@ -66,6 +79,24 @@ export default function Overview() {
         <StatCard label="Win Rate" value={winRate != null ? Number(winRate).toFixed(1) : '—'} suffix="%" icon={Target} />
         <StatCard label="Open Positions" value={openCount} icon={Briefcase} />
       </div>
+
+      {/* LONG / SHORT win rate split — only shown when data available */}
+      {(longWinRate != null || shortWinRate != null) && (
+        <div className="grid grid-cols-2 gap-4">
+          <StatCard
+            label="LONG Win Rate"
+            value={longWinRate != null ? Number(longWinRate).toFixed(1) : '—'}
+            suffix="%"
+            icon={TrendingUp}
+          />
+          <StatCard
+            label="SHORT Win Rate"
+            value={shortWinRate != null ? Number(shortWinRate).toFixed(1) : '—'}
+            suffix="%"
+            icon={TrendingDown}
+          />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Equity Curve */}

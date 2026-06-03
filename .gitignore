@@ -85,3 +85,13 @@ BACKUP_*/
 # OS
 Thumbs.db
 .DS_Store
+.mcp.json
+
+# Claude Code
+.claude/
+
+# Frontend build cache
+frontend/.vite/
+
+# V5 per-coin models (large, trained on Render)
+PRODUCTION_SYSTEM/models/v5/

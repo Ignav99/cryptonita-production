@@ -188,6 +188,11 @@ export const controls = {
     const response = await apiClient.post('/controls/reset-database');
     return response.data;
   },
+
+  softReset: async () => {
+    const response = await apiClient.post('/controls/soft-reset');
+    return response.data;
+  },
 };
 
 export default apiClient;

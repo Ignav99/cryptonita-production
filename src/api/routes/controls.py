@@ -418,3 +418,51 @@ async def reset_database(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Failed to reset database: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/soft-reset", response_model=BotControlResponse)
+async def soft_reset(current_user: dict = Depends(get_current_user)):
+    """
+    Soft reset — clears open positions and all signals, resets portfolio to
+    $3,000. Historical trades are preserved. Use this to start fresh without
+    losing performance history.
+    """
+    try:
+        from sqlalchemy import text
+
+        SOFT_RESET_CAPITAL = 3000.0
+
+        # Stop bot if running
+        if bot_manager.is_running():
+            bot_manager.stop(reason="Soft reset requested")
+
+        with db.engine.connect() as conn:
+            conn.execute(text("DELETE FROM positions"))
+            conn.execute(text("DELETE FROM signals"))
+
+            conn.execute(text("""
+                UPDATE portfolio
+                SET available_balance = :capital,
+                    initial_capital = :capital,
+                    total_invested = 0.0,
+                    realized_pnl = 0.0,
+                    last_update = NOW()
+            """), {"capital": SOFT_RESET_CAPITAL})
+
+            conn.execute(text("""
+                UPDATE bot_status
+                SET cycle_number = 0, total_signals = 0, buy_signals = 0,
+                    status = 'stopped', last_error = NULL, last_update = NOW()
+            """))
+            conn.commit()
+
+        logger.info(f"✅ Soft reset by {current_user['username']} — portfolio at ${SOFT_RESET_CAPITAL:,.2f}")
+
+        return BotControlResponse(
+            success=True,
+            message=f"Soft reset complete. Portfolio set to ${SOFT_RESET_CAPITAL:,.2f}. Historical trades preserved.",
+            status="stopped",
+        )
+    except Exception as e:
+        logger.error(f"Failed to soft reset: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

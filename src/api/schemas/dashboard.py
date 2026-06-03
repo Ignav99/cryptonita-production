@@ -143,7 +143,8 @@ class CoinTrend(BaseModel):
 
 class SignalsSummaryStats(BaseModel):
     total_coins_scanned: int
-    buy_signals_count: int
+    buy_signals_count: int      # LONG signals (V5) or BUY (V4)
+    short_signals_count: int = 0  # SHORT signals — V5 only
     hold_signals_count: int
     near_threshold_count: int
     avg_probability: float

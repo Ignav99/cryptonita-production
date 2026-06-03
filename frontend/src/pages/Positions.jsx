@@ -8,6 +8,12 @@ import Badge from '../components/ui/Badge';
 import clsx from 'clsx';
 import { format } from 'date-fns';
 
+function DirectionBadge({ row }) {
+  const name = (row.signal_name || row.signal_type || '').toUpperCase();
+  if (name === 'SHORT') return <Badge variant="danger">▼ SHORT</Badge>;
+  return <Badge variant="success">▲ LONG</Badge>;
+}
+
 export default function Positions() {
   const [tab, setTab] = useState('open');
 
@@ -26,11 +32,9 @@ export default function Positions() {
   const openColumns = [
     { key: 'ticker', label: 'Ticker', render: (v, row) => v || row.symbol },
     {
-      key: 'ticker',
+      key: 'signal_name',
       label: 'Side',
-      render: () => (
-        <Badge variant="success">LONG</Badge>
-      ),
+      render: (v, row) => <DirectionBadge row={row} />,
     },
     { key: 'avg_buy_price', label: 'Entry', render: (v) => v != null ? `$${Number(v).toFixed(4)}` : '—' },
     { key: 'current_price', label: 'Current', render: (v) => v != null ? `$${Number(v).toFixed(4)}` : '—' },
@@ -83,11 +87,9 @@ export default function Positions() {
   const closedColumns = [
     { key: 'ticker', label: 'Ticker', render: (v, row) => v || row.symbol },
     {
-      key: 'ticker',
+      key: 'signal_name',
       label: 'Side',
-      render: () => (
-        <Badge variant="success">LONG</Badge>
-      ),
+      render: (v, row) => <DirectionBadge row={row} />,
     },
     { key: 'entry_price', label: 'Entry', render: (v) => v != null ? `$${Number(v).toFixed(4)}` : '—' },
     { key: 'exit_price', label: 'Exit', render: (v) => v != null ? `$${Number(v).toFixed(4)}` : '—' },
