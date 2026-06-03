@@ -457,6 +457,14 @@ async def soft_reset(current_user: dict = Depends(get_current_user)):
             """))
             conn.commit()
 
+        # Clear training log separately — table may not exist on first deploy
+        try:
+            with db.engine.connect() as conn:
+                conn.execute(text("DELETE FROM training_log"))
+                conn.commit()
+        except Exception:
+            pass  # Table doesn't exist yet — training will run on first bot start
+
         logger.info(f"✅ Soft reset by {current_user['username']} — portfolio at ${SOFT_RESET_CAPITAL:,.2f}")
 
         return BotControlResponse(

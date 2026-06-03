@@ -259,13 +259,13 @@ class DatabaseManager:
             logger.error(f"❌ Failed to save signal: {e}")
             raise
 
-    def get_recent_signals(self, limit: int = 50, min_probability: float = 0.60, days: int = 7) -> pd.DataFrame:
+    def get_recent_signals(self, limit: int = 50, min_probability: float = 0.0, days: int = 7) -> pd.DataFrame:
         """
         Get recent signals filtered by probability and time
 
         Args:
             limit: Maximum number of signals to return
-            min_probability: Minimum probability threshold (default 60%)
+            min_probability: Minimum probability threshold (default 0 — show all, V5 uses 0.35)
             days: Number of days to look back (default 7)
 
         Returns:
@@ -312,8 +312,8 @@ class DatabaseManager:
         SELECT
             ticker,
             COUNT(*) as total_count,
-            COUNT(*) FILTER (WHERE signal_type = 'BUY') as buy_count,
-            COUNT(*) FILTER (WHERE signal_type = 'HOLD') as hold_count
+            COUNT(*) FILTER (WHERE signal_type IN ('BUY', 'LONG')) as buy_count,
+            COUNT(*) FILTER (WHERE signal_type IN ('HOLD', 'SHORT')) as hold_count
         FROM signals
         WHERE timestamp >= :cutoff
         GROUP BY ticker

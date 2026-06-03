@@ -311,8 +311,8 @@ class TradingBot:
             asyncio.create_task(self._binance_reconnect_loop()),
         ]
 
-        # Add auto-training loop if enabled and using V4
-        if getattr(settings, 'AUTO_TRAIN_ENABLED', False) and getattr(settings, 'USE_V4_MODEL', False):
+        # Add auto-training loop if enabled (works for both V4 and V5)
+        if getattr(settings, 'AUTO_TRAIN_ENABLED', True):
             tasks.append(asyncio.create_task(self._auto_training_loop()))
             logger.info("Auto-training loop enabled")
 
