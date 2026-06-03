@@ -76,6 +76,9 @@ services:
       - key: LOG_LEVEL
         value: INFO
 
+      - key: V5_MODEL_DIR
+        value: /var/data/models/v5
+
       - key: USE_V4_MODEL
         value: "false"
 
@@ -103,5 +106,10 @@ services:
 
       - key: USE_CHRONOS
         value: "false"  # Set to "true" only on 2GB+ RAM plan
+
+    disk:
+      name: cryptonita-models
+      mountPath: /var/data/models
+      sizeGB: 1
 
     healthCheckPath: /health

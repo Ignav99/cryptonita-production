@@ -1686,24 +1686,36 @@ class TradingBot:
                         await asyncio.sleep(3600)  # Check again in 1h
                         continue
 
-                from src.models.auto_trainer import AutoTrainer
-                trainer = AutoTrainer()
+                use_v5 = not getattr(settings, 'USE_V4_MODEL', True)
 
-                logger.info("Starting auto-training cycle...")
-                result = await trainer.run_auto_training()
+                if use_v5:
+                    from src.models.auto_trainer_v5 import AutoTrainerV5
+                    trainer = AutoTrainerV5()
+                    logger.info("Starting V5 auto-training cycle (global model)...")
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(None, trainer.train_global_model)
+                    model_version = "V5"
+                    if result is not None and hasattr(self.predictor, '_load_global_model'):
+                        self.predictor._load_global_model()
+                        logger.success("V5 global model reloaded after training")
+                else:
+                    from src.models.auto_trainer import AutoTrainer
+                    trainer = AutoTrainer()
+                    logger.info("Starting V4 auto-training cycle...")
+                    result = await trainer.run_auto_training()
+                    model_version = "V4"
+                    if result and result.get("promoted"):
+                        if hasattr(self.predictor, 'request_reload'):
+                            self.predictor.request_reload()
+                            logger.success(f"Model v{result.get('version')} promoted")
 
                 # Log training event to DB
                 self.db.save_training_log(
-                    model_version="V4",
-                    metrics=result
+                    model_version=model_version,
+                    metrics=result or {}
                 )
 
-                if result.get("promoted"):
-                    if hasattr(self.predictor, 'request_reload'):
-                        self.predictor.request_reload()
-                        logger.success(f"Model v{result['version']} promoted")
-
-                logger.info(f"Auto-training result: {result.get('status')}")
+                logger.info(f"Auto-training result: {(result or {}).get('status', 'completed')}")
 
             except Exception as e:
                 logger.error(f"Auto-training loop error: {e}")

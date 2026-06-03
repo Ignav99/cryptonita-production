@@ -12,14 +12,15 @@ No database required — purely filesystem-based.
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 from loguru import logger
 
 
-# Default base directory
-DEFAULT_V5_MODEL_DIR = "PRODUCTION_SYSTEM/models/v5"
+# Default base directory — override via V5_MODEL_DIR env var for persistent storage
+DEFAULT_V5_MODEL_DIR = os.environ.get("V5_MODEL_DIR", "PRODUCTION_SYSTEM/models/v5")
 
 # Metrics JSON filename (alongside model artifacts)
 METRICS_FILENAME = "v5_training_metrics.json"
