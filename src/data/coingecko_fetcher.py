@@ -140,16 +140,22 @@ class CoinGeckoFetcher:
     Fetches social + developer metrics for all configured tickers from CoinGecko.
 
     Uses the public free API (no key required). Fetches one coin at a time with
-    2.5s delay between calls to stay under the 30 req/min rate limit.
+    a small delay between calls. CoinGecko data is ENRICHMENT only — missing
+    features fall back to NaN and the model handles them gracefully.
+
+    Circuit breaker: after 3 consecutive 429s, skips all remaining tickers
+    immediately so the main scan cycle is never blocked.
 
     The 1h TTL cache means a 6h scan cycle only hits the API ~6 times per day.
-    Cold start takes ~2 min; all subsequent calls within 1h return instantly.
     """
 
-    RATE_LIMIT_DELAY = 3.5   # seconds between calls — safe for keyless free tier (~17 rpm)
+    RATE_LIMIT_DELAY = 2.0   # seconds between calls
     CACHE_TTL = 3600.0        # 1 hour
+    MAX_RETRIES = 1           # try once + one retry max; CG data is optional
+    CIRCUIT_BREAKER_THRESHOLD = 3  # consecutive 429s before bailing out
+    GLOBAL_TIMEOUT = 60.0     # seconds — hard cap for the full fetch
 
-    def __init__(self, timeout: float = 15.0):
+    def __init__(self, timeout: float = 10.0):
         self.timeout = timeout
         self._cache: Optional[Dict[str, Dict]] = None
         self._cache_time: float = 0.0
@@ -158,36 +164,43 @@ class CoinGeckoFetcher:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _fetch_one(self, coin_id: str, client: httpx.AsyncClient) -> Optional[Dict]:
-        """Fetch community + dev data for one coin ID with exponential backoff on 429."""
+    async def _fetch_one(
+        self, coin_id: str, client: httpx.AsyncClient, deadline: float
+    ) -> Optional[Dict]:
+        """
+        Fetch community + dev data for one coin ID.
+        Returns None on 429 or error (caller handles circuit breaker).
+        Deadline is enforced before any sleep to prevent blocking.
+        """
         url = (
             f"{_BASE_URL}/coins/{coin_id}"
             "?localization=false&tickers=false&market_data=false"
             "&community_data=true&developer_data=true&sparkline=false"
         )
-        max_retries = 2
-        for attempt in range(max_retries):
+        for attempt in range(self.MAX_RETRIES + 1):
+            if time.time() >= deadline:
+                return None
             try:
                 resp = await client.get(url, headers=_HEADERS, timeout=self.timeout)
                 if resp.status_code == 429:
-                    # Exponential backoff with jitter: 2^attempt * (10 + random 0-5s)
-                    wait = (2 ** attempt) * 10 + random.uniform(0, 5)
-                    logger.warning(
-                        f"CoinGecko 429 for {coin_id} — backoff {wait:.0f}s (attempt {attempt + 1}/{max_retries})"
-                    )
-                    await asyncio.sleep(wait)
-                    continue
+                    if attempt < self.MAX_RETRIES:
+                        wait = 5.0 + random.uniform(0, 3)
+                        # Only sleep if deadline allows it
+                        if time.time() + wait < deadline:
+                            logger.warning(
+                                f"CoinGecko 429 for {coin_id} — backoff {wait:.0f}s"
+                            )
+                            await asyncio.sleep(wait)
+                            continue
+                    logger.debug(f"CoinGecko 429 for {coin_id} — skipping")
+                    return None
                 if resp.status_code != 200:
                     logger.debug(f"CoinGecko {coin_id}: HTTP {resp.status_code}")
                     return None
                 return resp.json()
             except Exception as exc:
-                if attempt < max_retries - 1:
-                    wait = (2 ** attempt) * 5
-                    logger.debug(f"CoinGecko fetch error ({coin_id}), retry in {wait}s: {exc}")
-                    await asyncio.sleep(wait)
-                else:
-                    logger.debug(f"CoinGecko fetch failed ({coin_id}) after {max_retries} attempts: {exc}")
+                logger.debug(f"CoinGecko fetch error ({coin_id}): {exc}")
+                return None
         return None
 
     # ------------------------------------------------------------------
@@ -200,35 +213,46 @@ class CoinGeckoFetcher:
 
         Returns {ticker: {cg_feature: value}} for each ticker with data.
         Missing tickers return an empty dict (features will be NaN in model).
-
-        Cold start: ~2 min. Subsequent calls within 1h: instant.
+        Never blocks the scan cycle for more than GLOBAL_TIMEOUT seconds.
         """
         now = time.time()
         if self._cache is not None and (now - self._cache_time) < self.CACHE_TTL:
             return self._cache
 
         tickers = list(TICKER_TO_CG_ID.items())
-        logger.info(
-            f"CoinGecko: fetching {len(tickers)} tickers "
-            f"(~{len(tickers) * self.RATE_LIMIT_DELAY:.0f}s at {self.RATE_LIMIT_DELAY}s/call)"
-        )
+        logger.info(f"CoinGecko: fetching {len(tickers)} tickers (budget: {self.GLOBAL_TIMEOUT:.0f}s)")
 
         result: Dict[str, Dict] = {}
-        deadline = time.time() + 90  # global 90s cap — never block the scan cycle
+        deadline = time.time() + self.GLOBAL_TIMEOUT
+        consecutive_429s = 0
+
         async with httpx.AsyncClient() as client:
             for i, (ticker, coin_id) in enumerate(tickers):
                 if time.time() >= deadline:
-                    logger.warning(f"CoinGecko: 90s budget exhausted — skipping remaining {len(tickers) - i} tickers")
+                    logger.warning(
+                        f"CoinGecko: {self.GLOBAL_TIMEOUT:.0f}s budget exhausted — "
+                        f"skipping remaining {len(tickers) - i} tickers"
+                    )
                     break
+
+                if consecutive_429s >= self.CIRCUIT_BREAKER_THRESHOLD:
+                    logger.warning(
+                        f"CoinGecko: circuit breaker triggered ({consecutive_429s} consecutive 429s) — "
+                        f"skipping remaining {len(tickers) - i} tickers"
+                    )
+                    break
+
                 if i > 0:
                     await asyncio.sleep(self.RATE_LIMIT_DELAY)
 
-                data = await self._fetch_one(coin_id, client)
+                data = await self._fetch_one(coin_id, client, deadline)
                 if data:
                     result[ticker] = _normalize_features(data)
-                    logger.debug(f"CoinGecko [{ticker}] ({coin_id}): OK")
+                    consecutive_429s = 0
+                    logger.debug(f"CoinGecko [{ticker}] OK")
                 else:
                     result[ticker] = {}
+                    consecutive_429s += 1
 
         self._cache = result
         self._cache_time = time.time()
