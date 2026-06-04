@@ -1671,8 +1671,12 @@ class TradingBot:
 
         while self.is_running:
             try:
+                # Determine trainer version from active predictor
+                use_v5 = hasattr(self.predictor, '_load_global_model')
+                mv_filter = "V5" if use_v5 else "V4"
+
                 # Check DB for last training date (survives restarts)
-                last_trained = self.db.get_last_training_date()
+                last_trained = self.db.get_last_training_date(model_version=mv_filter)
                 if last_trained:
                     if isinstance(last_trained, str):
                         last_trained = datetime.fromisoformat(last_trained)
@@ -1685,8 +1689,6 @@ class TradingBot:
                         logger.info(f"Auto-training: last trained {days_since:.1f}d ago, next in {interval_days - days_since:.1f}d")
                         await asyncio.sleep(3600)  # Check again in 1h
                         continue
-
-                use_v5 = not getattr(settings, 'USE_V4_MODEL', True)
 
                 if use_v5:
                     from src.models.auto_trainer_v5 import AutoTrainerV5

@@ -136,14 +136,15 @@ class DatabaseManager:
             df: DataFrame with columns [timestamp, ticker, open, high, low, close, volume]
         """
         try:
-            df.to_sql(
-                'crypto_prices',
-                self.engine,
-                if_exists='append',
-                index=False,
-                chunksize=500,
-                method='multi',
-            )
+            with self.engine.begin() as conn:
+                df.to_sql(
+                    'crypto_prices',
+                    conn,
+                    if_exists='append',
+                    index=False,
+                    chunksize=500,
+                    method='multi',
+                )
             logger.info(f"✅ Saved {len(df)} crypto price records")
         except Exception as e:
             logger.error(f"❌ Failed to save crypto prices: {e}")
@@ -1300,7 +1301,7 @@ class DatabaseManager:
         except Exception as e:
             logger.warning(f"Schema upgrade warning: {e}")
 
-    def get_last_training_date(self) -> Optional[datetime]:
+    def get_last_training_date(self, model_version: Optional[str] = None) -> Optional[datetime]:
         """Get the last auto-training date from the database."""
         try:
             # Check if training_log table exists
@@ -1314,9 +1315,15 @@ class DatabaseManager:
                     )
                 """)
                 return None
-            result = self.execute_query(
-                "SELECT trained_at FROM training_log ORDER BY trained_at DESC LIMIT 1"
-            )
+            if model_version:
+                result = self.execute_query(
+                    "SELECT trained_at FROM training_log WHERE model_version = :mv ORDER BY trained_at DESC LIMIT 1",
+                    {"mv": model_version}
+                )
+            else:
+                result = self.execute_query(
+                    "SELECT trained_at FROM training_log ORDER BY trained_at DESC LIMIT 1"
+                )
             if not result.empty:
                 return result.iloc[0]['trained_at']
             return None
