@@ -1305,6 +1305,30 @@ class DatabaseManager:
         except Exception as e:
             logger.warning(f"Schema upgrade warning: {e}")
 
+        # Migrate check_signal_type constraint: BUY/SELL/HOLD -> LONG/SHORT/HOLD (V5 ternary)
+        migrate_constraint = """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                WHERE t.relname = 'signals'
+                AND c.conname = 'check_signal_type'
+                AND pg_get_constraintdef(c.oid) LIKE '%BUY%'
+            ) THEN
+                ALTER TABLE signals DROP CONSTRAINT check_signal_type;
+                ALTER TABLE signals ADD CONSTRAINT check_signal_type
+                    CHECK (signal_type IN ('LONG', 'SHORT', 'HOLD'));
+                RAISE NOTICE 'Migrated check_signal_type to V5 (LONG/SHORT/HOLD)';
+            END IF;
+        END$$
+        """
+        try:
+            self.execute_command(migrate_constraint)
+            logger.info("Schema upgrade: check_signal_type constraint ensured for V5")
+        except Exception as e:
+            logger.warning(f"Schema upgrade (signal constraint): {e}")
+
     def get_last_training_date(self, model_version: Optional[str] = None) -> Optional[datetime]:
         """Get the last auto-training date from the database."""
         try:
