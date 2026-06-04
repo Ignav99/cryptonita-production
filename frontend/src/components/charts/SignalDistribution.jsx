@@ -3,9 +3,11 @@ import EmptyState from '../ui/EmptyState';
 import { Signal } from 'lucide-react';
 
 const COLORS = {
-  BUY: '#3fb950',
-  SELL: '#f85149',
+  LONG: '#3fb950',
+  SHORT: '#f85149',
   HOLD: '#8b949e',
+  BUY: '#3fb950',   // V4 legacy
+  SELL: '#f85149',  // V4 legacy
 };
 
 const CustomTooltip = ({ active, payload }) => {
@@ -25,8 +27,14 @@ export default function SignalDistribution({ data }) {
   }
 
   const counts = data.reduce((acc, s) => {
-    const action = s.signal_type || s.latest_signal_type || s.action || 'HOLD';
-    acc[action] = (acc[action] || 0) + 1;
+    const raw = (
+      s.latest_signal_name || s.signal_name ||
+      s.latest_signal_type || s.signal_type ||
+      s.action || 'HOLD'
+    ).toUpperCase();
+    // Normalize V4 → V5
+    const key = raw === 'BUY' ? 'LONG' : raw === 'SELL' ? 'SHORT' : raw;
+    acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
 

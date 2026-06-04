@@ -281,8 +281,12 @@ export default function Signals() {
           icon={TrendingDown}
         />
         <StatCard
-          label="Avg Probability"
-          value={summary?.avg_probability != null ? `${(summary.avg_probability * 100).toFixed(1)}%` : '—'}
+          label="HOLD Rate"
+          value={
+            summary != null && summary.total_coins_scanned > 0
+              ? `${Math.round((summary.hold_signals_count / summary.total_coins_scanned) * 100)}%`
+              : '—'
+          }
           icon={Target}
         />
       </div>
@@ -386,7 +390,7 @@ export default function Signals() {
           icon={Signal}
           headerRight={
             <div className="flex gap-1">
-              {['ALL', 'BUY', 'SELL', 'HOLD'].map((f) => (
+              {['ALL', 'LONG', 'SHORT', 'HOLD'].map((f) => (
                 <button
                   key={f}
                   onClick={() => setSignalFilter(f)}
@@ -461,9 +465,14 @@ export default function Signals() {
                   {
                     key: 'signal_type',
                     label: 'Signal',
-                    render: (v) => (
-                      <Badge variant={v === 'BUY' ? 'success' : v === 'SELL' ? 'danger' : 'neutral'}>{v}</Badge>
-                    ),
+                    render: (v, row) => {
+                      const name = (row?.signal_name || v || 'HOLD').toUpperCase();
+                      const display = name === 'BUY' ? 'LONG' : name === 'SELL' ? 'SHORT' : name;
+                      const variant = name === 'LONG' || name === 'BUY' ? 'success'
+                        : name === 'SHORT' || name === 'SELL' ? 'danger'
+                        : 'neutral';
+                      return <Badge variant={variant}>{display}</Badge>;
+                    },
                   },
                   {
                     key: 'probability',
