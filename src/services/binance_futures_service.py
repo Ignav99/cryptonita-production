@@ -245,6 +245,7 @@ class BinanceFuturesService:
         """
         lev = leverage or self.default_leverage
         self.set_leverage(symbol, lev)
+        quantity = self.round_quantity(symbol, quantity)
         try:
             logger.info(f"Opening LONG: {symbol} qty={quantity} leverage={lev}x")
             order = self._api_call(
@@ -280,6 +281,7 @@ class BinanceFuturesService:
         """
         lev = leverage or self.default_leverage
         self.set_leverage(symbol, lev)
+        quantity = self.round_quantity(symbol, quantity)
         try:
             logger.info(f"Opening SHORT: {symbol} qty={quantity} leverage={lev}x")
             order = self._api_call(
@@ -414,6 +416,25 @@ class BinanceFuturesService:
         except BinanceAPIException as e:
             logger.error(f"SL placement failed {symbol}: {e}")
             return None
+
+    def round_quantity(self, symbol: str, quantity: float) -> float:
+        """
+        Round quantity to the symbol's LOT_SIZE stepSize from Futures exchange info.
+        Prevents -1111 precision errors.
+        """
+        try:
+            info = self._api_call(self.client.futures_exchange_info)
+            for s in info.get("symbols", []):
+                if s["symbol"] == symbol:
+                    for f in s.get("filters", []):
+                        if f["filterType"] == "LOT_SIZE":
+                            step_size = float(f["stepSize"])
+                            precision = len(str(step_size).rstrip("0").split(".")[-1])
+                            return round(quantity - (quantity % step_size), precision)
+            return quantity
+        except Exception as e:
+            logger.warning(f"Futures round_quantity failed for {symbol}: {e}")
+            return quantity
 
     def test_connectivity(self) -> bool:
         """Test connectivity to Binance Futures API."""

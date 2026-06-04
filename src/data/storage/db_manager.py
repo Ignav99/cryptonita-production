@@ -1321,6 +1321,20 @@ class DatabaseManager:
         except Exception as e:
             logger.debug(f"Schema alter add constraint (may already exist): {e}")
 
+        # Migrate check_action constraint in trades: BUY/SELL -> LONG/SHORT/HOLD (V5 ternary)
+        try:
+            self.execute_command("ALTER TABLE trades DROP CONSTRAINT IF EXISTS check_action")
+        except Exception as e:
+            logger.debug(f"Schema alter drop check_action (may not exist): {e}")
+        try:
+            self.execute_command(
+                "ALTER TABLE trades ADD CONSTRAINT check_action "
+                "CHECK (action IN ('BUY', 'SELL', 'LONG', 'SHORT', 'HOLD'))"
+            )
+            logger.info("Schema upgrade: check_action migrated to V5 (BUY/SELL/LONG/SHORT/HOLD)")
+        except Exception as e:
+            logger.debug(f"Schema alter add check_action (may already exist): {e}")
+
     def get_last_training_date(self, model_version: Optional[str] = None) -> Optional[datetime]:
         """Get the last auto-training date from the database."""
         try:
