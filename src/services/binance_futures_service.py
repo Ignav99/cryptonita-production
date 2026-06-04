@@ -54,6 +54,7 @@ class BinanceFuturesService:
         self.default_leverage = default_leverage
         self._lock = Lock()
         self._leverage_cache: Dict[str, int] = {}  # symbol -> leverage set
+        self._step_size_cache: Dict[str, float] = {}  # symbol -> stepSize
         self._backoff_until = 0.0
 
         if not lazy_init:
@@ -420,8 +421,13 @@ class BinanceFuturesService:
     def round_quantity(self, symbol: str, quantity: float) -> float:
         """
         Round quantity to the symbol's LOT_SIZE stepSize from Futures exchange info.
-        Prevents -1111 precision errors.
+        Prevents -1111 precision errors. Caches stepSize per symbol to avoid
+        repeated API calls (which could fail intermittently on testnet).
         """
+        if symbol in self._step_size_cache:
+            step_size = self._step_size_cache[symbol]
+            precision = len(str(step_size).rstrip("0").split(".")[-1])
+            return round(quantity - (quantity % step_size), precision)
         try:
             info = self._api_call(self.client.futures_exchange_info)
             for s in info.get("symbols", []):
@@ -429,6 +435,7 @@ class BinanceFuturesService:
                     for f in s.get("filters", []):
                         if f["filterType"] == "LOT_SIZE":
                             step_size = float(f["stepSize"])
+                            self._step_size_cache[symbol] = step_size
                             precision = len(str(step_size).rstrip("0").split(".")[-1])
                             return round(quantity - (quantity % step_size), precision)
             return quantity

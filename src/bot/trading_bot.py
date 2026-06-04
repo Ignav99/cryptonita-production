@@ -969,8 +969,16 @@ class TradingBot:
             return
 
         # 6. Get actual executed price
-        executed_price = float(order.get('fills', [{}])[0].get('price', current_price))
-        executed_qty = float(order['executedQty'])
+        if position_type == 'short':
+            # Futures MARKET orders: testnet may return executedQty=0 before fill
+            # Use origQty as fallback (what was requested = what will be filled)
+            raw_qty = float(order.get('executedQty', 0))
+            executed_qty = raw_qty if raw_qty > 0 else float(order.get('origQty', 0))
+            avg_price = float(order.get('avgPrice', 0))
+            executed_price = avg_price if avg_price > 0 else current_price
+        else:
+            executed_price = float(order.get('fills', [{}])[0].get('price', current_price))
+            executed_qty = float(order['executedQty'])
         executed_value = executed_price * executed_qty
 
         logger.success(f"✅ {signal_name} executed: {executed_qty} {ticker} @ ${executed_price:.2f}")
