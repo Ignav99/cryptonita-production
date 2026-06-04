@@ -28,12 +28,12 @@ export default function Trades() {
       key: 'action',
       label: 'Action',
       render: (v, row) => {
-        const action = v || row.side;
-        return (
-          <Badge variant={action === 'BUY' ? 'success' : 'danger'}>
-            {action}
-          </Badge>
-        );
+        const action = (v || row.side || '').toUpperCase();
+        const variant =
+          action === 'BUY' || action === 'LONG'  ? 'long'  :
+          action === 'SELL' || action === 'SHORT' ? 'short' :
+          'neutral';
+        return <Badge variant={variant}>{action}</Badge>;
       },
     },
     {
@@ -53,6 +53,11 @@ export default function Trades() {
         const total = v || (row.price && row.quantity ? Number(row.price) * Number(row.quantity) : null);
         return total != null ? `$${Number(total).toFixed(2)}` : '—';
       },
+    },
+    {
+      key: 'probability',
+      label: 'Prob',
+      render: (v) => v != null ? `${(Number(v) * 100).toFixed(1)}%` : '—',
     },
     {
       key: 'status',
