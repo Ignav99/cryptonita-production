@@ -136,21 +136,19 @@ class DatabaseManager:
             df: DataFrame with columns [timestamp, ticker, open, high, low, close, volume]
         """
         try:
-            raw_conn = self.engine.raw_connection()
-            try:
-                df.to_sql(
-                    'crypto_prices',
-                    con=raw_conn,
-                    if_exists='append',
-                    index=False,
-                    chunksize=500,
+            if df.empty:
+                logger.warning("⚠️ Empty DataFrame, nothing to save")
+                return
+            records = df[['timestamp', 'ticker', 'open', 'high', 'low', 'close', 'volume']].to_dict('records')
+            with self.engine.begin() as conn:
+                conn.execute(
+                    text("""
+                        INSERT INTO crypto_prices (timestamp, ticker, open, high, low, close, volume)
+                        VALUES (:timestamp, :ticker, :open, :high, :low, :close, :volume)
+                        ON CONFLICT (timestamp, ticker) DO NOTHING
+                    """),
+                    records
                 )
-                raw_conn.commit()
-            except Exception:
-                raw_conn.rollback()
-                raise
-            finally:
-                raw_conn.close()
             logger.info(f"✅ Saved {len(df)} crypto price records")
         except Exception as e:
             logger.error(f"❌ Failed to save crypto prices: {e}")
