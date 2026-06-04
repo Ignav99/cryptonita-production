@@ -105,6 +105,7 @@ class SignalDetail(BaseModel):
     ticker: str
     display_name: str
     signal_type: str
+    signal_name: Optional[str] = None
     probability: float
     threshold: float
     distance_to_threshold: float
@@ -162,6 +163,7 @@ class ThresholdProximity(BaseModel):
     distance_pct: float
     tier: int
     signal_type: str
+    signal_name: Optional[str] = None
 
 
 class SignalAnalysisSummary(BaseModel):

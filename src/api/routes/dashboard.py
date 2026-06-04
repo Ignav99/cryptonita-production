@@ -267,6 +267,7 @@ async def get_threshold_proximity(current_user: dict = Depends(get_current_user)
                 distance_pct=distance_pct,
                 tier=profile['tier'],
                 signal_type=row['signal_type'],
+                signal_name=row.get('signal_name'),
             ))
 
         results.sort(key=lambda x: abs(x.distance_pct))
@@ -301,6 +302,7 @@ async def get_recent_signals(
                 ticker=ticker,
                 display_name=display_names.get(ticker, ticker.replace('USDT', '')),
                 signal_type=row['signal_type'],
+                signal_name=row.get('signal_name'),
                 probability=round(prob, 4),
                 threshold=threshold,
                 distance_to_threshold=round(prob - threshold, 4),
