@@ -608,4 +608,4 @@ class TradingPredictorV5:
             lambda r: r["p_long"] if r["signal_class"] == SIGNAL_LONG else r["p_short"],
             axis=1,
         )
-        return filtered.sort_values("_confidence", ascending=False).head(top_n).drop(columns=["_confidence"])
+        return filtered.sort_values("_confidence", ascending=False).head(top_n).rename(columns={"_confidence": "probability"})
