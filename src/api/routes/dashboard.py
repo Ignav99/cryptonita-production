@@ -174,6 +174,7 @@ async def get_coin_summaries(current_user: dict = Depends(get_current_user)):
                 ticker=ticker,
                 display_name=display_names.get(ticker, ticker.replace('USDT', '')),
                 latest_signal_type=row['signal_type'],
+                latest_signal_name=row.get('signal_name'),
                 latest_probability=round(prob, 4),
                 threshold=threshold,
                 tier=profile['tier'],

@@ -122,6 +122,7 @@ class CoinSummary(BaseModel):
     ticker: str
     display_name: str
     latest_signal_type: str
+    latest_signal_name: Optional[str] = None
     latest_probability: float
     threshold: float
     tier: int
