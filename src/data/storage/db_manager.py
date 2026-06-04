@@ -136,15 +136,21 @@ class DatabaseManager:
             df: DataFrame with columns [timestamp, ticker, open, high, low, close, volume]
         """
         try:
-            with self.engine.connect() as conn:
+            raw_conn = self.engine.raw_connection()
+            try:
                 df.to_sql(
                     'crypto_prices',
-                    con=conn,
+                    con=raw_conn,
                     if_exists='append',
                     index=False,
                     chunksize=500,
                 )
-                conn.commit()
+                raw_conn.commit()
+            except Exception:
+                raw_conn.rollback()
+                raise
+            finally:
+                raw_conn.close()
             logger.info(f"✅ Saved {len(df)} crypto price records")
         except Exception as e:
             logger.error(f"❌ Failed to save crypto prices: {e}")
