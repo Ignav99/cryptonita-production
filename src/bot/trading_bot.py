@@ -1686,9 +1686,16 @@ class TradingBot:
                         now = datetime.utcnow()
                     days_since = (now - last_trained).total_seconds() / 86400
                     if days_since < interval_days:
-                        logger.info(f"Auto-training: last trained {days_since:.1f}d ago, next in {interval_days - days_since:.1f}d")
-                        await asyncio.sleep(3600)  # Check again in 1h
-                        continue
+                        # V5: bypass interval if model is missing from disk (e.g. after redeploy)
+                        if use_v5 and getattr(self.predictor, '_global_model', None) is None:
+                            logger.info(
+                                f"[V5] Global model missing despite recent training ({days_since:.1f}d ago) "
+                                "— triggering immediate re-training"
+                            )
+                        else:
+                            logger.info(f"Auto-training: last trained {days_since:.1f}d ago, next in {interval_days - days_since:.1f}d")
+                            await asyncio.sleep(3600)  # Check again in 1h
+                            continue
 
                 if use_v5:
                     from src.models.auto_trainer_v5 import AutoTrainerV5
