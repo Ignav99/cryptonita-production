@@ -165,13 +165,13 @@ class CoinGeckoFetcher:
             "?localization=false&tickers=false&market_data=false"
             "&community_data=true&developer_data=true&sparkline=false"
         )
-        max_retries = 4
+        max_retries = 2
         for attempt in range(max_retries):
             try:
                 resp = await client.get(url, headers=_HEADERS, timeout=self.timeout)
                 if resp.status_code == 429:
-                    # Exponential backoff with jitter: 2^attempt * (15 + random 0-10s)
-                    wait = (2 ** attempt) * 15 + random.uniform(0, 10)
+                    # Exponential backoff with jitter: 2^attempt * (10 + random 0-5s)
+                    wait = (2 ** attempt) * 10 + random.uniform(0, 5)
                     logger.warning(
                         f"CoinGecko 429 for {coin_id} — backoff {wait:.0f}s (attempt {attempt + 1}/{max_retries})"
                     )
@@ -214,8 +214,12 @@ class CoinGeckoFetcher:
         )
 
         result: Dict[str, Dict] = {}
+        deadline = time.time() + 90  # global 90s cap — never block the scan cycle
         async with httpx.AsyncClient() as client:
             for i, (ticker, coin_id) in enumerate(tickers):
+                if time.time() >= deadline:
+                    logger.warning(f"CoinGecko: 90s budget exhausted — skipping remaining {len(tickers) - i} tickers")
+                    break
                 if i > 0:
                     await asyncio.sleep(self.RATE_LIMIT_DELAY)
 
