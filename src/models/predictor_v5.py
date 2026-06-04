@@ -440,6 +440,10 @@ class TradingPredictorV5:
         if self._needs_reload:
             self.request_reload()
 
+        # Auto-load model if it was trained after startup (hot-pickup)
+        if self._global_model is None:
+            self._load_global_model()
+
         results = []
 
         # Refresh external data once per batch
