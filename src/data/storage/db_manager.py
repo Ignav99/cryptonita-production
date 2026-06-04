@@ -1306,28 +1306,20 @@ class DatabaseManager:
             logger.warning(f"Schema upgrade warning: {e}")
 
         # Migrate check_signal_type constraint: BUY/SELL/HOLD -> LONG/SHORT/HOLD (V5 ternary)
-        migrate_constraint = """
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM pg_constraint c
-                JOIN pg_class t ON t.oid = c.conrelid
-                WHERE t.relname = 'signals'
-                AND c.conname = 'check_signal_type'
-                AND pg_get_constraintdef(c.oid) LIKE '%BUY%'
-            ) THEN
-                ALTER TABLE signals DROP CONSTRAINT check_signal_type;
-                ALTER TABLE signals ADD CONSTRAINT check_signal_type
-                    CHECK (signal_type IN ('LONG', 'SHORT', 'HOLD'));
-                RAISE NOTICE 'Migrated check_signal_type to V5 (LONG/SHORT/HOLD)';
-            END IF;
-        END$$
-        """
+        # Drop the old constraint (IF EXISTS makes this safe on repeat runs)
         try:
-            self.execute_command(migrate_constraint)
-            logger.info("Schema upgrade: check_signal_type constraint ensured for V5")
+            self.execute_command("ALTER TABLE signals DROP CONSTRAINT IF EXISTS check_signal_type")
         except Exception as e:
-            logger.warning(f"Schema upgrade (signal constraint): {e}")
+            logger.debug(f"Schema alter drop constraint (may not exist): {e}")
+        # Re-add with V5 values (safe: previous DROP ensures no duplicate)
+        try:
+            self.execute_command(
+                "ALTER TABLE signals ADD CONSTRAINT check_signal_type "
+                "CHECK (signal_type IN ('LONG', 'SHORT', 'HOLD'))"
+            )
+            logger.info("Schema upgrade: check_signal_type migrated to V5 (LONG/SHORT/HOLD)")
+        except Exception as e:
+            logger.debug(f"Schema alter add constraint (may already exist): {e}")
 
     def get_last_training_date(self, model_version: Optional[str] = None) -> Optional[datetime]:
         """Get the last auto-training date from the database."""
