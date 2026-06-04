@@ -1,7 +1,7 @@
 """
 Bot Control Routes
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from loguru import logger
 
 from config import settings
@@ -368,6 +368,69 @@ async def trigger_training(current_user: dict = Depends(get_current_user)):
         )
     except Exception as e:
         logger.error(f"Failed to trigger training: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/training/trigger-v5")
+async def trigger_v5_training(
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Trigger V5 global model training in the background.
+
+    Saves the trained model to V5_MODEL_DIR (persistent disk on Render).
+    The predictor hot-reloads automatically when training finishes.
+    Check logs for completion.
+    """
+    try:
+        from src.models.auto_trainer_v5 import AutoTrainerV5
+        from src.models.per_coin_model_store import PerCoinModelStore
+
+        store = PerCoinModelStore()
+
+        if not str(store.base_dir.resolve()).startswith("/var/data"):
+            logger.warning(
+                f"[V5] V5_MODEL_DIR is {store.base_dir.resolve()} — "
+                "expected /var/data/models/v5 on Render. "
+                "Check that V5_MODEL_DIR env var is set."
+            )
+
+        trainer = AutoTrainerV5(model_store=store)
+
+        if trainer.is_training:
+            return BotControlResponse(
+                success=False,
+                message="V5 training is already in progress",
+                status="training",
+            )
+
+        def _run_global_training():
+            try:
+                result = trainer.train_global_model()
+                logger.success(
+                    f"[V5] Background global training finished: "
+                    f"acc={result.get('oos_accuracy', 'N/A')}"
+                    if result else "[V5] Background global training returned None"
+                )
+            except Exception as exc:
+                logger.error(f"[V5] Background global training failed: {exc}")
+
+        background_tasks.add_task(_run_global_training)
+
+        logger.info(f"[V5] Manual global training triggered by {current_user['username']}")
+
+        return BotControlResponse(
+            success=True,
+            message=(
+                f"V5 global training started in background. "
+                f"Model will be saved to: {store.base_dir.resolve() / 'global'}. "
+                "Check logs for completion."
+            ),
+            status="training",
+        )
+    except Exception as e:
+        logger.error(f"Failed to trigger V5 training: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

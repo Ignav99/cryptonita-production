@@ -19,7 +19,23 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 
-# Default base directory — override via V5_MODEL_DIR env var for persistent storage
+def _default_v5_model_dir() -> str:
+    """
+    Resolve the default V5 model directory at call-time (not import-time).
+
+    Reads from settings.V5_MODEL_DIR so that pydantic picks up the
+    V5_MODEL_DIR env var reliably (same as predictor_v5.py does).
+    Falls back to the raw env var and then to the hardcoded path only if
+    settings cannot be imported (e.g. during testing).
+    """
+    try:
+        from config import settings
+        return str(settings.V5_MODEL_DIR)
+    except Exception:
+        return os.environ.get("V5_MODEL_DIR", "PRODUCTION_SYSTEM/models/v5")
+
+
+# Kept for backwards-compat import (some scripts may reference this symbol)
 DEFAULT_V5_MODEL_DIR = os.environ.get("V5_MODEL_DIR", "PRODUCTION_SYSTEM/models/v5")
 
 # Metrics JSON filename (alongside model artifacts)
@@ -36,7 +52,7 @@ class PerCoinModelStore:
     """
 
     def __init__(self, base_dir: Optional[str] = None):
-        self.base_dir = Path(base_dir or DEFAULT_V5_MODEL_DIR)
+        self.base_dir = Path(base_dir or _default_v5_model_dir())
         self.base_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"[PerCoinModelStore] Base dir: {self.base_dir.resolve()}")
 

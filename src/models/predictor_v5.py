@@ -109,6 +109,7 @@ class TradingPredictorV5:
         """Load the global V5 model (used as fallback if no per-coin model)."""
         global_dir = self.model_base_dir / "global"
         metadata_path = global_dir / "v5_ensemble_metadata.json"
+        logger.info(f"[V5] Checking global model at: {metadata_path.resolve()} (exists={metadata_path.exists()})")
         if metadata_path.exists():
             try:
                 self._global_model = EnsembleV5()
