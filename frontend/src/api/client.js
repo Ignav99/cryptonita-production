@@ -136,6 +136,11 @@ export const dashboard = {
     return response.data;
   },
 
+  getPortfolioValue: async () => {
+    const response = await apiClient.get('/dashboard/portfolio-value');
+    return response.data;
+  },
+
   backfillPerformance: async () => {
     const response = await apiClient.post('/dashboard/backfill-performance');
     return response.data;
