@@ -1,16 +1,9 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Wallet,
-  TrendingUp,
-  TrendingDown,
-  Target,
-  Briefcase,
-  Play,
-  Square,
-  Pause,
-  Signal,
-  Cpu,
+  Wallet, DollarSign, TrendingUp, TrendingDown, Target, Briefcase,
+  Play, Square, Pause, Signal, Cpu, ArrowRightLeft,
 } from 'lucide-react';
+import clsx from 'clsx';
 import { controls, dashboard } from '../api/client';
 import { useDashboard } from '../context/DashboardContext';
 import StatCard from '../components/ui/StatCard';
@@ -30,6 +23,12 @@ export default function Overview() {
   const { data: recentSignals } = useQuery({
     queryKey: ['signals', 5],
     queryFn: () => dashboard.getSignals(5),
+    refetchInterval: 15000,
+  });
+
+  const { data: recentTrades } = useQuery({
+    queryKey: ['trades', 10],
+    queryFn: () => dashboard.getTrades(10),
     refetchInterval: 15000,
   });
 
@@ -53,8 +52,9 @@ export default function Overview() {
   const winRate = stats?.win_rate;
   const openCount = stats?.active_positions ?? stats?.open_positions ?? 0;
 
-  const longWinRate = stats?.long_win_rate;
-  const shortWinRate = stats?.short_win_rate;
+  const todayPnl = stats?.today_pnl;
+  const usdt_available = stats?.usdt_balance;
+  const positions_value = stats?.positions_value;
 
   return (
     <div className="space-y-6">
@@ -68,7 +68,18 @@ export default function Overview() {
 
       {/* Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Balance" value={balance != null ? Number(balance).toFixed(2) : '—'} prefix="$" icon={Wallet} />
+        <StatCard
+          label="Portfolio Value"
+          value={balance != null ? Number(balance).toFixed(2) : '—'}
+          prefix="$"
+          icon={Wallet}
+        />
+        <StatCard
+          label="USDT Available"
+          value={usdt_available != null ? Number(usdt_available).toFixed(2) : '—'}
+          prefix="$"
+          icon={DollarSign}
+        />
         <StatCard
           label="Total PnL"
           value={totalPnl != null ? Number(totalPnl).toFixed(2) : '—'}
@@ -76,25 +87,23 @@ export default function Overview() {
           icon={TrendingUp}
           change={totalPnl != null ? Number(Number(totalPnl).toFixed(2)) : undefined}
         />
-        <StatCard label="Win Rate" value={winRate != null ? Number(winRate).toFixed(1) : '—'} suffix="%" icon={Target} />
-        <StatCard label="Open Positions" value={openCount} icon={Briefcase} />
+        <StatCard
+          label="Win Rate"
+          value={winRate != null ? Number(winRate).toFixed(1) : '—'}
+          suffix="%"
+          icon={Target}
+        />
       </div>
 
-      {/* LONG / SHORT win rate split — only shown when data available */}
-      {(longWinRate != null || shortWinRate != null) && (
-        <div className="grid grid-cols-2 gap-4">
-          <StatCard
-            label="LONG Win Rate"
-            value={longWinRate != null ? Number(longWinRate).toFixed(1) : '—'}
-            suffix="%"
-            icon={TrendingUp}
-          />
-          <StatCard
-            label="SHORT Win Rate"
-            value={shortWinRate != null ? Number(shortWinRate).toFixed(1) : '—'}
-            suffix="%"
-            icon={TrendingDown}
-          />
+      {todayPnl != null && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-card border border-dark-border">
+          <span className="text-xs text-text-secondary uppercase tracking-wide font-medium">Today's PnL</span>
+          <span className={clsx(
+            'text-sm font-bold ml-auto',
+            Number(todayPnl) >= 0 ? 'text-accent-green' : 'text-accent-red'
+          )}>
+            {Number(todayPnl) >= 0 ? '+' : ''}{Number(todayPnl).toFixed(2)} USDT
+          </span>
         </div>
       )}
 
@@ -185,19 +194,53 @@ export default function Overview() {
                         {sig.timestamp ? format(new Date(sig.timestamp), 'HH:mm') : ''}
                       </span>
                     </div>
-                    <Badge
-                      variant={
-                        (sig.signal_type || sig.action) === 'BUY' ? 'success' :
-                        (sig.signal_type || sig.action) === 'SELL' ? 'danger' : 'neutral'
-                      }
-                    >
-                      {sig.signal_type || sig.action}
-                    </Badge>
+                    {(() => {
+                      const sigAction = (sig.signal_name || sig.signal_type || '').toUpperCase();
+                      const variant =
+                        sigAction === 'BUY'  || sigAction === 'LONG'  ? 'long'  :
+                        sigAction === 'SELL' || sigAction === 'SHORT'  ? 'short' :
+                        'neutral';
+                      return <Badge variant={variant}>{sigAction || '—'}</Badge>;
+                    })()}
                   </div>
                 ))}
               </div>
             ) : (
               <p className="text-sm text-text-secondary">No recent signals</p>
+            )}
+          </Card>
+
+          <Card title="Recent Orders" icon={ArrowRightLeft}>
+            {recentTrades && recentTrades.length > 0 ? (
+              <div className="space-y-2">
+                {recentTrades.map((trade, i) => {
+                  const action = (trade.action || '').toUpperCase();
+                  const variant =
+                    action === 'BUY' || action === 'LONG'   ? 'long'  :
+                    action === 'SELL' || action === 'SHORT'  ? 'short' :
+                    'neutral';
+                  return (
+                    <div key={i} className="flex items-center justify-between py-1.5 border-b border-dark-border/50 last:border-0">
+                      <div className="flex items-center gap-2">
+                        <Badge variant={variant}>{action}</Badge>
+                        <span className="text-sm font-medium text-text-primary">{trade.ticker}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-xs text-text-secondary">
+                          ${Number(trade.price).toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                        </span>
+                        {trade.timestamp && (
+                          <span className="text-xs text-text-secondary ml-2">
+                            {format(new Date(trade.timestamp), 'HH:mm')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-sm text-text-secondary">No trades yet</p>
             )}
           </Card>
         </div>
