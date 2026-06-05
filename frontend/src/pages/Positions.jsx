@@ -9,9 +9,10 @@ import clsx from 'clsx';
 import { format } from 'date-fns';
 
 function DirectionBadge({ row }) {
-  const name = (row.signal_name || row.signal_type || '').toUpperCase();
-  if (name === 'SHORT') return <Badge variant="danger">▼ SHORT</Badge>;
-  return <Badge variant="success">▲ LONG</Badge>;
+  const name = (row.signal_name || row.signal_type || 'UNKNOWN').toUpperCase();
+  if (name === 'SHORT') return <Badge variant="short">▼ SHORT</Badge>;
+  if (name === 'LONG' || name === 'BUY') return <Badge variant="long">▲ LONG</Badge>;
+  return <Badge variant="neutral">— {name}</Badge>;
 }
 
 export default function Positions() {
