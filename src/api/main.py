@@ -115,7 +115,7 @@ async def root():
         <body>
             <div class="container">
                 <h1>🚀 Cryptonita Trading Bot</h1>
-                <p>ML-Powered Cryptocurrency Trading System V4</p>
+                <p>ML-Powered Cryptocurrency Trading System V5</p>
                 <p>Model: Ensemble (XGB+LGBM+CatBoost) | Auto-Training | ~80 Features</p>
                 <div class="links">
                     <a href="/api/docs">📚 API Documentation</a>
@@ -149,7 +149,7 @@ async def startup_event():
     logger.info(f"Version: {settings.APP_VERSION}")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Trading Mode: {settings.TRADING_MODE}")
-    logger.info(f"V4 Model: {getattr(settings, 'USE_V4_MODEL', False)}")
+    logger.info(f"V5 Model dir: {getattr(settings, 'V5_MODEL_DIR', 'not set')}")
     logger.info(f"Auto-Train: {getattr(settings, 'AUTO_TRAIN_ENABLED', False)}")
     logger.info(f"API running on: http://{settings.API_HOST}:{settings.API_PORT}")
     logger.info("=" * 60)
@@ -425,7 +425,7 @@ def _generate_review_report(db: DatabaseManager) -> dict:
     # Signals in period
     signals_query = """
     SELECT COUNT(*) as total,
-           COUNT(CASE WHEN signal_type = 'BUY' THEN 1 END) as buy_signals
+           COUNT(CASE WHEN signal_type IN ('BUY', 'LONG') THEN 1 END) as buy_signals
     FROM signals WHERE timestamp >= :start
     """
     sig_df = db.execute_query(signals_query, {'start': period_start})
