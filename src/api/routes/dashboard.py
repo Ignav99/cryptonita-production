@@ -539,6 +539,11 @@ async def recalibrate_portfolio(current_user: dict = Depends(get_current_user)):
         portfolio = db.get_portfolio()
         initial_capital = portfolio['initial_capital']
 
+        # 0. Clean up historical bad data: trades with quantity=0 (pre-fix era)
+        db.execute_command("""
+            DELETE FROM trades WHERE quantity = 0 AND status = 'executed'
+        """)
+
         # 1. Real invested = sum of (remaining_qty * avg_buy_price) for open positions
         invested_df = db.execute_query("""
             SELECT COALESCE(SUM(remaining_quantity * avg_buy_price), 0) as real_invested
@@ -546,23 +551,68 @@ async def recalibrate_portfolio(current_user: dict = Depends(get_current_user)):
         """)
         real_invested = float(invested_df.iloc[0]['real_invested'])
 
-        # 2. Realized PnL from matched BUY/SELL pairs (FIFO matched)
+        # 2. Realized PnL from matched pairs (FIFO) — supports BUY/SELL (Spot) and LONG/EXIT_LONG + SHORT/EXIT_SHORT (Futures)
         pnl_df = db.execute_query("""
-            WITH numbered_buys AS (
+            WITH
+            -- Spot: BUY/SELL pairs
+            spot_buys AS (
                 SELECT ticker, price, quantity,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'BUY' AND status = 'executed'
+                FROM trades WHERE action = 'BUY' AND status = 'executed' AND quantity > 0
             ),
-            numbered_sells AS (
+            spot_sells AS (
                 SELECT ticker, price, quantity,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'SELL' AND status = 'executed'
+                FROM trades WHERE action = 'SELL' AND status = 'executed' AND quantity > 0
+            ),
+            spot_pnl AS (
+                SELECT COALESCE(SUM(
+                    (s.price - b.price) * LEAST(b.quantity, s.quantity)
+                ), 0) as pnl
+                FROM spot_buys b
+                INNER JOIN spot_sells s ON b.ticker = s.ticker AND b.rn = s.rn
+            ),
+            -- Futures LONG: LONG entry / EXIT_LONG exit
+            long_entries AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action IN ('LONG', 'BUY') AND status = 'executed' AND quantity > 0
+            ),
+            long_exits AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'EXIT_LONG' AND status = 'executed' AND quantity > 0
+            ),
+            long_pnl AS (
+                SELECT COALESCE(SUM(
+                    (x.price - e.price) * LEAST(e.quantity, x.quantity)
+                ), 0) as pnl
+                FROM long_entries e
+                INNER JOIN long_exits x ON e.ticker = x.ticker AND e.rn = x.rn
+            ),
+            -- Futures SHORT: SHORT entry / EXIT_SHORT exit (profit when price falls)
+            short_entries AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'SHORT' AND status = 'executed' AND quantity > 0
+            ),
+            short_exits AS (
+                SELECT ticker, price, quantity,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
+                FROM trades WHERE action = 'EXIT_SHORT' AND status = 'executed' AND quantity > 0
+            ),
+            short_pnl AS (
+                SELECT COALESCE(SUM(
+                    (e.price - x.price) * LEAST(e.quantity, x.quantity)
+                ), 0) as pnl
+                FROM short_entries e
+                INNER JOIN short_exits x ON e.ticker = x.ticker AND e.rn = x.rn
             )
-            SELECT COALESCE(SUM(
-                (s.price - b.price) * LEAST(b.quantity, s.quantity)
-            ), 0) as realized_pnl
-            FROM numbered_buys b
-            INNER JOIN numbered_sells s ON b.ticker = s.ticker AND b.rn = s.rn
+            SELECT (
+                (SELECT pnl FROM spot_pnl) +
+                (SELECT pnl FROM long_pnl) +
+                (SELECT pnl FROM short_pnl)
+            ) as realized_pnl
         """)
         realized_pnl = float(pnl_df.iloc[0]['realized_pnl'])
 

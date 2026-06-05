@@ -28,6 +28,7 @@ class DatabaseManager:
         """
         self.database_url = database_url
         self.engine: Engine = self._create_engine()
+        self._run_migrations()
         logger.info("✅ Database connection established")
 
     def _create_engine(self) -> Engine:
@@ -40,6 +41,20 @@ class DatabaseManager:
             pool_pre_ping=True,  # Verify connections before using
             echo=False
         )
+
+    def _run_migrations(self) -> None:
+        """Apply idempotent schema migrations on startup"""
+        migrations = [
+            # Add signal_name to positions (nullable — existing rows keep NULL)
+            "ALTER TABLE positions ADD COLUMN IF NOT EXISTS signal_name VARCHAR(20)",
+        ]
+        try:
+            with self.engine.connect() as conn:
+                for sql in migrations:
+                    conn.execute(text(sql))
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Migration warning (non-fatal): {e}")
 
     # ============================================
     # CONNECTION MANAGEMENT
@@ -550,6 +565,7 @@ class DatabaseManager:
         atr_pct: float = None,
         trailing_stop_enabled: bool = False,
         trade_id: int = None,
+        signal_name: str = None,
     ) -> bool:
         """
         Insert or update a position with full state
@@ -599,6 +615,7 @@ class DatabaseManager:
                     tp3 = :tp3, tp3_hit = :tp3_hit, tp3_size = :tp3_size,
                     atr_pct = :atr_pct,
                     trailing_stop_enabled = :trailing_stop_enabled,
+                    signal_name = COALESCE(:signal_name, signal_name),
                     last_update = :last_update
                 WHERE ticker = :ticker
                 """
@@ -610,13 +627,13 @@ class DatabaseManager:
                     current_price, total_value, pnl, pnl_percentage,
                     stop_loss, tp1, tp1_hit, tp1_size, tp2, tp2_hit, tp2_size,
                     tp3, tp3_hit, tp3_size, atr_pct, trailing_stop_enabled,
-                    trade_id, entry_time, last_update
+                    trade_id, signal_name, entry_time, last_update
                 ) VALUES (
                     :ticker, :quantity, :remaining_quantity, :avg_buy_price,
                     :current_price, :total_value, :pnl, :pnl_percentage,
                     :stop_loss, :tp1, :tp1_hit, :tp1_size, :tp2, :tp2_hit, :tp2_size,
                     :tp3, :tp3_hit, :tp3_size, :atr_pct, :trailing_stop_enabled,
-                    :trade_id, :entry_time, :last_update
+                    :trade_id, :signal_name, :entry_time, :last_update
                 )
                 """
 
@@ -636,6 +653,7 @@ class DatabaseManager:
                 'atr_pct': atr_pct,
                 'trailing_stop_enabled': trailing_stop_enabled,
                 'trade_id': trade_id,
+                'signal_name': signal_name,
                 'entry_time': datetime.utcnow(),
                 'last_update': datetime.utcnow()
             }
@@ -706,7 +724,7 @@ class DatabaseManager:
             query += " AND date <= :end_date"
             params['end_date'] = end_date
 
-        query += " ORDER BY date DESC LIMIT :limit"
+        query += " ORDER BY date ASC LIMIT :limit"
 
         return self.execute_query(query, params)
 

@@ -1109,6 +1109,7 @@ class TradingBot:
             atr_pct=tp_sl['atr_pct'],
             trailing_stop_enabled=tp_sl['trailing_stop_enabled'],
             trade_id=trade_id,
+            signal_name=signal_name,
         )
 
         # 10. Update position tracking with dynamic TP/SL data
