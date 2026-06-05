@@ -145,6 +145,11 @@ export const dashboard = {
     const response = await apiClient.post('/dashboard/backfill-performance');
     return response.data;
   },
+
+  recalibratePortfolio: async () => {
+    const response = await apiClient.post('/dashboard/portfolio/recalibrate');
+    return response.data;
+  },
 };
 
 // Controls API

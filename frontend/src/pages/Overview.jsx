@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Wallet, DollarSign, TrendingUp, TrendingDown, Target, Briefcase,
-  Play, Square, Pause, Signal, Cpu, ArrowRightLeft,
+  Play, Square, Pause, Signal, Cpu, ArrowRightLeft, RefreshCcw,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { controls, dashboard } from '../api/client';
@@ -45,6 +45,16 @@ export default function Overview() {
   const pauseBot = useMutation({
     mutationFn: () => controls.pauseBot(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['botStatus'] }),
+  });
+
+  const recalibrate = useMutation({
+    mutationFn: () => dashboard.recalibratePortfolio(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['stats'] });
+      queryClient.invalidateQueries({ queryKey: ['positions'] });
+      queryClient.invalidateQueries({ queryKey: ['trades'] });
+      queryClient.invalidateQueries({ queryKey: ['performance'] });
+    },
   });
 
   const balance = stats?.portfolio_value ?? stats?.balance ?? stats?.total_balance;
@@ -178,6 +188,21 @@ export default function Overview() {
                       Stop
                     </Button>
                   </>
+                )}
+              </div>
+              <div className="pt-2 border-t border-dark-border">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={RefreshCcw}
+                  loading={recalibrate.isPending}
+                  onClick={() => recalibrate.mutate()}
+                  className="w-full text-text-secondary hover:text-accent-blue"
+                >
+                  {recalibrate.isSuccess ? '✓ Recalibrated' : 'Recalibrate Portfolio'}
+                </Button>
+                {recalibrate.isError && (
+                  <p className="text-xs text-accent-red mt-1">Failed to recalibrate</p>
                 )}
               </div>
             </div>
