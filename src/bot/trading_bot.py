@@ -135,12 +135,19 @@ class TradingBot:
                     dust_cleaned += 1
                     continue
 
+                # Derive position_type from signal_name (persisted in DB)
+                _signal_name = pos.get('signal_name', 'LONG')
+                _position_type = 'short' if str(_signal_name).upper() == 'SHORT' else 'long'
+                # Correct stop_loss fallback per type: SHORT SL is above entry, LONG SL is below
+                _sl_fallback = entry_price * (1 + settings.STOP_LOSS_PCT) if _position_type == 'short' else entry_price * (1 - settings.STOP_LOSS_PCT)
+
                 self.positions[ticker] = {
                     'quantity': float(pos['quantity']),
                     'remaining_quantity': remaining_qty,
                     'entry_price': entry_price,
                     'current_price': current_price,
-                    'stop_loss': float(pos['stop_loss']) if pd.notna(pos.get('stop_loss')) else entry_price * (1 - settings.STOP_LOSS_PCT),
+                    'position_type': _position_type,
+                    'stop_loss': float(pos['stop_loss']) if pd.notna(pos.get('stop_loss')) else _sl_fallback,
                     'tp1': float(pos['tp1']) if pd.notna(pos.get('tp1')) else None,
                     'tp1_hit': bool(pos.get('tp1_hit', False)),
                     'tp2': float(pos['tp2']) if pd.notna(pos.get('tp2')) else None,
