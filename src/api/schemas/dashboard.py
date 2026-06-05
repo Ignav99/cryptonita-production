@@ -41,6 +41,8 @@ class Position(BaseModel):
     tp3_hit: Optional[bool]
     entry_time: Optional[datetime]
     last_update: datetime
+    signal_name: Optional[str] = None
+    trade_id: Optional[int] = None
 
 
 class Signal(BaseModel):
