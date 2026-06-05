@@ -416,32 +416,36 @@ class DatabaseManager:
 
     def get_closed_positions(self, limit: int = 50) -> pd.DataFrame:
         """
-        Get closed positions (matched BUY/SELL pairs) with P&L
+        Get closed positions (matched entry/exit pairs) with P&L
 
         Returns DataFrame with:
-        - ticker, entry_price, exit_price, quantity
+        - ticker, signal_name, entry_price, exit_price, quantity
         - entry_time, exit_time
         - pnl, pnl_percentage
         - probability (model confidence at entry)
+
+        V5 compatible: handles LONG, SHORT, and legacy BUY entries.
+        PnL is inverted for SHORT positions (profit when price falls).
         """
         query = """
-        WITH buy_trades AS (
+        WITH entry_trades AS (
             SELECT
                 id,
                 ticker,
+                action as signal_name,
                 price as entry_price,
                 quantity,
                 timestamp as entry_time,
                 probability,
                 ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
             FROM trades
-            WHERE action = 'BUY' AND status = 'executed'
+            WHERE action IN ('BUY', 'LONG', 'SHORT') AND status = 'executed'
         ),
-        sell_trades AS (
+        exit_trades AS (
             SELECT
                 ticker,
                 price as exit_price,
-                quantity as sell_quantity,
+                quantity as exit_quantity,
                 timestamp as exit_time,
                 ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
             FROM trades
@@ -449,19 +453,30 @@ class DatabaseManager:
         ),
         matched_trades AS (
             SELECT
-                b.ticker,
-                b.entry_price,
-                s.exit_price,
-                LEAST(b.quantity, s.sell_quantity) as quantity,
-                b.entry_time,
-                s.exit_time,
-                b.probability,
-                (s.exit_price - b.entry_price) * LEAST(b.quantity, s.sell_quantity) as pnl,
-                ((s.exit_price - b.entry_price) / b.entry_price) * 100 as pnl_percentage
-            FROM buy_trades b
-            INNER JOIN sell_trades s ON b.ticker = s.ticker AND b.rn = s.rn
-                AND s.exit_time >= b.entry_time
-            ORDER BY s.exit_time DESC
+                e.ticker,
+                e.signal_name,
+                e.entry_price,
+                x.exit_price,
+                LEAST(e.quantity, x.exit_quantity) as quantity,
+                e.entry_time,
+                x.exit_time,
+                e.probability,
+                CASE
+                    WHEN e.signal_name = 'SHORT' THEN
+                        (e.entry_price - x.exit_price) * LEAST(e.quantity, x.exit_quantity)
+                    ELSE
+                        (x.exit_price - e.entry_price) * LEAST(e.quantity, x.exit_quantity)
+                END as pnl,
+                CASE
+                    WHEN e.signal_name = 'SHORT' THEN
+                        ((e.entry_price - x.exit_price) / e.entry_price) * 100
+                    ELSE
+                        ((x.exit_price - e.entry_price) / e.entry_price) * 100
+                END as pnl_percentage
+            FROM entry_trades e
+            INNER JOIN exit_trades x ON e.ticker = x.ticker AND e.rn = x.rn
+                AND x.exit_time >= e.entry_time
+            ORDER BY x.exit_time DESC
             LIMIT :limit
         )
         SELECT * FROM matched_trades
