@@ -47,6 +47,8 @@ class DatabaseManager:
         migrations = [
             # Add signal_name to positions (nullable — existing rows keep NULL)
             "ALTER TABLE positions ADD COLUMN IF NOT EXISTS signal_name VARCHAR(20)",
+            # Add signal_name to signals (nullable — existing rows keep NULL, frontend falls back to signal_type)
+            "ALTER TABLE signals ADD COLUMN IF NOT EXISTS signal_name VARCHAR(20)",
         ]
         try:
             with self.engine.connect() as conn:
