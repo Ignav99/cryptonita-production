@@ -307,7 +307,7 @@ class DatabaseManager:
     def get_all_latest_signals(self) -> pd.DataFrame:
         """Get the latest signal per ticker (DISTINCT ON)"""
         query = """
-        SELECT DISTINCT ON (ticker) id, ticker, signal_type, probability, rejection_reason, timestamp
+        SELECT DISTINCT ON (ticker) id, ticker, signal_type, signal_name, probability, rejection_reason, timestamp
         FROM signals
         ORDER BY ticker, timestamp DESC
         """

@@ -366,11 +366,8 @@ class TradingBot:
 
                 # Snapshot daily performance metrics for equity curve
                 try:
-                    balance = self.binance.get_account_balance()
-                    usdt = float(balance.get('USDT', {}).get('free', 0)) + float(balance.get('USDT', {}).get('locked', 0))
-                    positions_df = self.db.get_positions()
-                    pos_value = float(positions_df['total_value'].sum()) if not positions_df.empty and 'total_value' in positions_df.columns else 0.0
-                    portfolio_value = usdt + pos_value
+                    portfolio = self.db.get_portfolio()
+                    portfolio_value = portfolio.get('total_value', 0.0)
                     self.db.snapshot_daily_performance(portfolio_value)
                     logger.info(f"📊 Daily performance snapshot saved (portfolio: ${portfolio_value:.2f})")
                 except Exception as snap_err:

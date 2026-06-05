@@ -38,10 +38,13 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
             initial_capital=portfolio['initial_capital']
         )
 
-        # Override with accurate portfolio values
+        # Override with accurate portfolio values (managed portfolio is source of truth)
         stats['usdt_balance'] = portfolio['available_balance']
         stats['positions_value'] = portfolio['total_invested']
         stats['portfolio_value'] = portfolio['total_value']
+        stats['realized_pnl'] = portfolio['realized_pnl']
+        # total_pnl = realized + unrealized; unrealized already computed from open positions
+        stats['total_pnl'] = round(portfolio['realized_pnl'] + stats.get('unrealized_pnl', 0.0), 2)
 
         return DashboardStats(**stats)
     except Exception as e:

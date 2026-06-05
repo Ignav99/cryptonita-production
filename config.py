@@ -385,7 +385,7 @@ class Settings(BaseSettings):
     # ============================================
     # HEALTH MONITOR
     # ============================================
-    MAX_TRADES_PER_DAY: int = 20          # Circuit breaker
+    MAX_TRADES_PER_DAY: int = 100         # Circuit breaker
     STALE_PRICE_ALERT_HOURS: int = 2
 
     # ============================================
