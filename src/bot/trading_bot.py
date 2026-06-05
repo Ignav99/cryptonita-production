@@ -1463,8 +1463,15 @@ class TradingBot:
                 order = self.binance.create_market_sell_order(ticker, quantity)
 
             if order:
-                executed_price = float(order.get('fills', [{}])[0].get('price', price))
-                executed_qty = float(order['executedQty'])
+                # Futures orders (SHORT close) use avgPrice — no fills array
+                if pos_type == 'short':
+                    avg_price = float(order.get('avgPrice', 0))
+                    executed_price = avg_price if avg_price > 0 else price
+                    raw_qty = float(order.get('executedQty', 0))
+                    executed_qty = raw_qty if raw_qty > 0 else float(order.get('origQty', quantity))
+                else:
+                    executed_price = float(order.get('fills', [{}])[0].get('price', price))
+                    executed_qty = float(order['executedQty'])
                 executed_value = executed_price * executed_qty
 
                 # Calculate P&L — inverted for SHORT (profit when price falls)

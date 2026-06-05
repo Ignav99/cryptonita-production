@@ -313,6 +313,7 @@ class BinanceFuturesService:
             Order dict or None on failure.
         """
         try:
+            quantity = self.round_quantity(symbol, abs(quantity))
             logger.info(f"Closing LONG: {symbol} qty={quantity}")
             order = self._api_call(
                 self.client.futures_create_order,
@@ -342,7 +343,7 @@ class BinanceFuturesService:
             Order dict or None on failure.
         """
         try:
-            quantity = abs(quantity)
+            quantity = self.round_quantity(symbol, abs(quantity))
             logger.info(f"Closing SHORT: {symbol} qty={quantity}")
             order = self._api_call(
                 self.client.futures_create_order,
