@@ -432,7 +432,12 @@ class DatabaseManager:
             SELECT
                 id,
                 ticker,
-                action as signal_name,
+                COALESCE(
+                    CASE WHEN action IN ('LONG', 'BUY') THEN 'LONG'
+                         WHEN action = 'SHORT' THEN 'SHORT'
+                         ELSE action END,
+                    'UNKNOWN'
+                ) as signal_name,
                 price as entry_price,
                 quantity,
                 timestamp as entry_time,
@@ -449,7 +454,7 @@ class DatabaseManager:
                 timestamp as exit_time,
                 ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
             FROM trades
-            WHERE action = 'SELL' AND status = 'executed'
+            WHERE action IN ('SELL', 'EXIT_LONG', 'EXIT_SHORT') AND status = 'executed'
         ),
         matched_trades AS (
             SELECT
@@ -822,12 +827,12 @@ class DatabaseManager:
                 WITH numbered_buys AS (
                     SELECT ticker, price, quantity, timestamp,
                            ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                    FROM trades WHERE action = 'BUY' AND status = 'executed'
+                    FROM trades WHERE action IN ('BUY', 'LONG', 'SHORT') AND status = 'executed'
                 ),
                 numbered_sells AS (
                     SELECT ticker, price, quantity, timestamp,
                            ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                    FROM trades WHERE action = 'SELL' AND status = 'executed'
+                    FROM trades WHERE action IN ('SELL', 'EXIT_LONG', 'EXIT_SHORT') AND status = 'executed'
                 )
                 SELECT (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl
                 FROM numbered_buys b
@@ -896,12 +901,12 @@ class DatabaseManager:
             WITH numbered_buys AS (
                 SELECT ticker, price, quantity, timestamp,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'BUY' AND status = 'executed'
+                FROM trades WHERE action IN ('BUY', 'LONG', 'SHORT') AND status = 'executed'
             ),
             numbered_sells AS (
                 SELECT ticker, price, quantity, timestamp,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'SELL' AND status = 'executed'
+                FROM trades WHERE action IN ('SELL', 'EXIT_LONG', 'EXIT_SHORT') AND status = 'executed'
             )
             SELECT COALESCE(SUM(
                 (s.price - b.price) * LEAST(b.quantity, s.quantity)
@@ -918,12 +923,12 @@ class DatabaseManager:
             WITH numbered_buys AS (
                 SELECT ticker, price, quantity, timestamp,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'BUY' AND status = 'executed'
+                FROM trades WHERE action IN ('BUY', 'LONG', 'SHORT') AND status = 'executed'
             ),
             numbered_sells AS (
                 SELECT ticker, price, quantity, timestamp,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'SELL' AND status = 'executed'
+                FROM trades WHERE action IN ('SELL', 'EXIT_LONG', 'EXIT_SHORT') AND status = 'executed'
             ),
             matched AS (
                 SELECT (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl
@@ -1004,12 +1009,12 @@ class DatabaseManager:
             WITH numbered_buys AS (
                 SELECT ticker, price, quantity, timestamp,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'BUY' AND status = 'executed'
+                FROM trades WHERE action IN ('BUY', 'LONG', 'SHORT') AND status = 'executed'
             ),
             numbered_sells AS (
                 SELECT ticker, price, quantity, timestamp,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'SELL' AND status = 'executed'
+                FROM trades WHERE action IN ('SELL', 'EXIT_LONG', 'EXIT_SHORT') AND status = 'executed'
             )
             SELECT COALESCE(SUM(
                 (s.price - b.price) * LEAST(b.quantity, s.quantity)
@@ -1032,12 +1037,12 @@ class DatabaseManager:
             WITH numbered_buys AS (
                 SELECT ticker, price, quantity, timestamp,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'BUY' AND status = 'executed'
+                FROM trades WHERE action IN ('BUY', 'LONG', 'SHORT') AND status = 'executed'
             ),
             numbered_sells AS (
                 SELECT ticker, price, quantity, timestamp,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'SELL' AND status = 'executed'
+                FROM trades WHERE action IN ('SELL', 'EXIT_LONG', 'EXIT_SHORT') AND status = 'executed'
             ),
             matched AS (
                 SELECT (s.price - b.price) * LEAST(b.quantity, s.quantity) as pnl
@@ -1063,12 +1068,12 @@ class DatabaseManager:
             WITH numbered_buys AS (
                 SELECT ticker, price, quantity, timestamp,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'BUY' AND status = 'executed'
+                FROM trades WHERE action IN ('BUY', 'LONG', 'SHORT') AND status = 'executed'
             ),
             numbered_sells AS (
                 SELECT ticker, price, quantity, timestamp,
                        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY timestamp) as rn
-                FROM trades WHERE action = 'SELL' AND status = 'executed'
+                FROM trades WHERE action IN ('SELL', 'EXIT_LONG', 'EXIT_SHORT') AND status = 'executed'
             )
             SELECT COALESCE(SUM(
                 (s.price - b.price) * LEAST(b.quantity, s.quantity)
