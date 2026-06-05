@@ -133,7 +133,7 @@ class ThresholdCalibrator:
             FROM trades t
             JOIN signals s
               ON s.ticker = t.ticker
-             AND s.signal_type = 'BUY'
+             AND s.signal_type IN ('BUY', 'LONG', 'SHORT')
              AND s.timestamp BETWEEN t.timestamp - INTERVAL '1 hour'
                                  AND t.timestamp + INTERVAL '1 hour'
             WHERE t.ticker   = :ticker

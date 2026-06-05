@@ -671,7 +671,7 @@ async def get_signal_analysis(current_user: dict = Depends(get_current_user)):
         signals_df = db.execute_query("""
             SELECT id, ticker, signal_type, probability, timestamp
             FROM signals
-            WHERE signal_type = 'BUY'
+            WHERE signal_type IN ('BUY', 'LONG', 'SHORT')
             ORDER BY timestamp ASC
         """, {})
 
