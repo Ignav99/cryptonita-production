@@ -259,8 +259,7 @@ class Settings(BaseSettings):
     MODEL_VERSION: str = "V4"
 
     # V4 Ensemble Model (XGB+LGBM+CatBoost + LogisticRegression meta-learner)
-    USE_V4_MODEL: bool = Field(default=True, env="USE_V4_MODEL")
-    V4_MODEL_DIR: str = str(PROJECT_ROOT / "PRODUCTION_SYSTEM/models/v4")
+    USE_V4_MODEL: bool = Field(default=False, env="USE_V4_MODEL")
     # V5 Ternary Model — persistent disk path (Render: /var/data/models/v5)
     V5_MODEL_DIR: str = Field(default=str(PROJECT_ROOT / "PRODUCTION_SYSTEM/models/v5"), env="V5_MODEL_DIR")
     KELLY_FRACTION: float = Field(default=0.25, env="KELLY_FRACTION")
