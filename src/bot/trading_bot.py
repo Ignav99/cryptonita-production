@@ -51,7 +51,7 @@ class TradingBot:
 
         # V5 Ternary Predictor (LONG / SHORT / HOLD)
         from src.market_regime import MarketRegimeDetector
-from src.models.predictor_v5 import TradingPredictorV5
+        from src.models.predictor_v5 import TradingPredictorV5
         from src.services.binance_futures_service import BinanceFuturesService
         self.predictor = TradingPredictorV5()
         self.binance_futures = BinanceFuturesService()  # For SHORT execution
