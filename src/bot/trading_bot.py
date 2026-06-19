@@ -31,6 +31,95 @@ from src.trading.signal_queue import SignalQueue
 from src.bot.health_monitor import HealthMonitor
 
 
+# ============================================================================
+# STOP LOSS & TAKE PROFIT CALCULATION FUNCTIONS
+# ============================================================================
+
+def calculate_stop_loss(entry_price: float, offset_pct: float) -> float:
+    """
+    Calculate stop loss price with offset percentage above entry.
+
+    This function computes a protective stop loss level positioned above
+    the entry price, useful for short positions where the risk is upward.
+    For long positions, use a negative offset_pct.
+
+    Args:
+        entry_price: The entry price of the position (USD)
+        offset_pct: Offset percentage (e.g., 5.0 for +5% above entry)
+
+    Returns:
+        Stop loss price as a float
+
+    Examples:
+        >>> calculate_stop_loss(100.0, 5.0)  # Short SL: +5% above entry
+        105.0
+        >>> calculate_stop_loss(100.0, -5.0)  # Long SL: -5% below entry
+        95.0
+    """
+    if entry_price <= 0:
+        raise ValueError("entry_price must be positive")
+    return entry_price * (1 + offset_pct / 100.0)
+
+
+def calculate_take_profit(entry_price: float, target_pct: float) -> float:
+    """
+    Calculate take profit price with target percentage above entry.
+
+    This function computes the profit-taking level for a position.
+    For long positions, use positive target_pct; for shorts, use negative.
+
+    Args:
+        entry_price: The entry price of the position (USD)
+        target_pct: Target percentage gain (e.g., 10.0 for +10%)
+
+    Returns:
+        Take profit price as a float
+
+    Examples:
+        >>> calculate_take_profit(100.0, 10.0)  # Long TP: +10%
+        110.0
+        >>> calculate_take_profit(100.0, -10.0)  # Short TP: -10%
+        90.0
+    """
+    if entry_price <= 0:
+        raise ValueError("entry_price must be positive")
+    return entry_price * (1 + target_pct / 100.0)
+
+
+def can_close_trade(entry_time: datetime, max_hold_minutes: int) -> bool:
+    """
+    Determine whether a trade can be closed based on hold time limit.
+
+    This function checks if the elapsed time since entry exceeds the
+    maximum hold duration. Useful for time-based exit logic (e.g., force
+    close positions held longer than 30 minutes).
+
+    Args:
+        entry_time: When the position was entered (datetime object)
+        max_hold_minutes: Maximum hold duration in minutes
+
+    Returns:
+        True if max_hold_minutes has elapsed, False otherwise
+
+    Examples:
+        >>> import time
+        >>> from datetime import datetime, timedelta
+        >>> past = datetime.utcnow() - timedelta(minutes=35)
+        >>> can_close_trade(past, 30)  # Position held 35 min > 30 min limit
+        True
+        >>> recent = datetime.utcnow() - timedelta(minutes=10)
+        >>> can_close_trade(recent, 30)  # Position held 10 min < 30 min limit
+        False
+    """
+    if not isinstance(entry_time, datetime):
+        raise TypeError("entry_time must be a datetime object")
+    if max_hold_minutes <= 0:
+        raise ValueError("max_hold_minutes must be positive")
+
+    elapsed = datetime.utcnow() - entry_time
+    return elapsed >= timedelta(minutes=max_hold_minutes)
+
+
 class TradingBot:
     """
     Main trading bot for automated cryptocurrency trading

@@ -90,6 +90,15 @@ class Settings(BaseSettings):
     MAX_POSITIONS: int = 10  # Smart rotation will handle overflow
 
     # ============================================
+    # TRADING PARAMETERS (Stop Loss & Take Profit)
+    # ============================================
+    TRADING_PARAMS: Dict[str, any] = {
+        'SL_OFFSET_PCT': 5.0,      # Stop loss offset: +5% above entry (protective)
+        'TP_TARGET_PCT': 10.0,     # Take profit target: +10%
+        'MAX_HOLD_MINUTES': 30,    # Maximum hold time: 30 minutes
+    }
+
+    # ============================================
     # MARKET REGIME FILTER (BTC 4h EMA slope)
     # ============================================
     # Prevents counter-trend SHORTs when market is bullish
