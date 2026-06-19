@@ -50,7 +50,8 @@ class TradingBot:
         self.binance_data = BinanceDataService()  # For historical data (production, read-only)
 
         # V5 Ternary Predictor (LONG / SHORT / HOLD)
-        from src.models.predictor_v5 import TradingPredictorV5
+        from src.market_regime import MarketRegimeDetector
+from src.models.predictor_v5 import TradingPredictorV5
         from src.services.binance_futures_service import BinanceFuturesService
         self.predictor = TradingPredictorV5()
         self.binance_futures = BinanceFuturesService()  # For SHORT execution
@@ -67,6 +68,10 @@ class TradingBot:
         self.lifecycle_manager = PositionLifecycleManager(self.hold_estimator)
         self.signal_queue = SignalQueue()
         self.health_monitor = HealthMonitor()
+        self.regime_detector = MarketRegimeDetector(
+            ema_period=settings.MARKET_REGIME.get('ema_period', 20),
+            slope_threshold=settings.MARKET_REGIME.get('slope_threshold', 0.0005)
+        )
 
         logger.info("💡 Using Binance PRODUCTION for data, TESTNET for trading")
 
@@ -850,6 +855,29 @@ class TradingBot:
         if len(self.positions) >= regime_max:
             logger.warning(f"⚠️ Trade blocked: regime limit {regime_max} positions reached")
             # Still allow smart rotation below
+
+        # 0e. Market regime filter (BTC 4h EMA slope)
+        if settings.MARKET_REGIME.get('enabled', True):
+            try:
+                btc_candles = self.binance_data.fetch_klines(
+                    'BTCUSDT',
+                    settings.MARKET_REGIME.get('timeframe', '4h'),
+                    limit=100
+                )
+                regime = self.regime_detector.detect(btc_candles)
+                
+                # Signal direction determines which regime check applies
+                if signal_name == 'SHORT' and not self.regime_detector.allow_short(regime):
+                    logger.info(f"🚫 Signal blocked: {signal_name} SHORT denied (regime={regime}, BTC EMA slope bearish protection)")
+                    return
+                
+                if signal_name == 'LONG' and not self.regime_detector.allow_long(regime):
+                    logger.info(f"🚫 Signal blocked: {signal_name} LONG denied (regime={regime}, BTC EMA slope bearish protection)")
+                    return
+                
+                logger.info(f"📊 Market regime: {regime} (BTC 4h EMA slope)")
+            except Exception as e:
+                logger.warning(f"⚠️ Market regime check failed (continuing): {e}")
 
         # 1. Get current price
         current_price = self.binance.get_current_price(ticker)

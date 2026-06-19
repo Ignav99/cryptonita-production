@@ -90,6 +90,22 @@ class Settings(BaseSettings):
     MAX_POSITIONS: int = 10  # Smart rotation will handle overflow
 
     # ============================================
+    # MARKET REGIME FILTER (BTC 4h EMA slope)
+    # ============================================
+    # Prevents counter-trend SHORTs when market is bullish
+    # Prevents counter-trend LONGs when market is bearish
+    MARKET_REGIME: Dict[str, any] = {
+        'enabled': True,
+        'ticker': 'BTCUSDT',
+        'timeframe': '4h',
+        'ema_period': 20,
+        'slope_threshold': 0.0005,  # ±0.05% per 4h candle (conservative)
+        'block_shorts_in_bullish': True,
+        'block_longs_in_bearish': True,
+    }
+
+
+    # ============================================
     # SUPPORTED TICKERS (Altcoins volátiles para pumps +20%)
     # ============================================
     # Criterios de selección:
