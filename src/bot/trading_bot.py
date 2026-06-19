@@ -1545,6 +1545,104 @@ class TradingBot:
         except Exception as e:
             logger.error(f"❌ Exit failed for {ticker}: {e}")
 
+    def force_close_position(self, ticker: str, record_pnl: bool = True) -> dict:
+        """
+        Force-close an open position with inverse order.
+        Used for legacy positions bleeding losses.
+
+        Args:
+            ticker: Ticker to close (e.g. 'AXSUSDT')
+            record_pnl: If True, log PnL to DB. If False, close silently.
+
+        Returns:
+            Order dict {'orderId': int, 'side': str, 'quantity': float, 'price': float}
+            or empty dict {} if position not found
+
+        Raises:
+            RuntimeError: If order placement fails
+        """
+        try:
+            # Guard: skip dust positions
+            if ticker in self.positions:
+                quantity = self.positions[ticker].get('remaining_qty', self.positions[ticker].get('quantity', 0))
+                price = self.positions[ticker].get('entry_price', 0)
+            else:
+                logger.warning(f"⚠️ Position not found for {ticker}")
+                return {}
+
+            if self.binance.is_dust_position(ticker, abs(quantity), price):
+                logger.info(f"🧹 Skipping dust close for {ticker} (qty={quantity:.2e})")
+                self.db.delete_position(ticker)
+                return {}
+
+            # Determine position type
+            pos_type = self.positions[ticker].get('position_type', 'long')
+            entry_price = self.positions[ticker].get('entry_price', price)
+
+            logger.info(f"💰 Force-closing {pos_type.upper()} position: {quantity} {ticker} @ entry ${entry_price:.4f}")
+
+            # Round quantity
+            quantity = self.binance.round_quantity(ticker, quantity)
+
+            # Final check: rounded quantity could be 0
+            if quantity <= 0:
+                logger.info(f"🧹 Rounded qty is 0 for {ticker}, deleting position")
+                self.db.delete_position(ticker)
+                return {}
+
+            # Execute market close — Spot sell for LONG, Futures close_short for SHORT
+            if pos_type == 'short':
+                order = self.binance_futures.close_short(ticker, quantity)
+            else:
+                order = self.binance.create_market_sell_order(ticker, quantity)
+
+            if not order:
+                raise RuntimeError(f"Order placement failed for {ticker}")
+
+            # Parse order response (same logic as _execute_exit)
+            if pos_type == 'short':
+                avg_price = float(order.get('avgPrice', 0))
+                executed_price = avg_price if avg_price > 0 else entry_price
+                raw_qty = float(order.get('executedQty', 0))
+                executed_qty = raw_qty if raw_qty > 0 else float(order.get('origQty', quantity))
+            else:
+                executed_price = float(order.get('fills', [{}])[0].get('price', entry_price))
+                executed_qty = float(order.get('executedQty', quantity))
+
+            executed_value = executed_price * executed_qty
+
+            # Calculate P&L — inverted for SHORT
+            if pos_type == 'short':
+                pnl = (entry_price - executed_price) * executed_qty
+            else:
+                pnl = (executed_price - entry_price) * executed_qty
+
+            logger.success(f"✅ FORCE CLOSE executed ({pos_type.upper()}): {executed_qty} {ticker} @ ${executed_price:.2f} | P&L: ${pnl:+.2f}")
+
+            # Record P&L if requested
+            if record_pnl:
+                self.db.add_to_balance(
+                    amount=executed_value,
+                    pnl=pnl,
+                    ticker=ticker
+                )
+                self.db.delete_position(ticker)
+                logger.info(f"💾 P&L recorded: +${executed_value:.2f}, P&L: ${pnl:+.2f}")
+            else:
+                logger.info(f"🔇 Position closed silently (P&L not recorded)")
+
+            # Return order dict with standardized keys
+            return {
+                'orderId': order.get('orderId', 0),
+                'side': order.get('side', 'SELL' if pos_type == 'long' else 'BUY'),
+                'quantity': executed_qty,
+                'price': executed_price,
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Force close failed for {ticker}: {e}")
+            raise RuntimeError(f"Force close failed for {ticker}: {e}")
+
     # ============================================
     # BINANCE SYNC (every 60 minutes)
     # ============================================
