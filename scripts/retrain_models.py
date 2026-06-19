@@ -24,13 +24,15 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.models.ensemble_v5 import EnsembleV5
-from src.db_manager import get_db_connection
 from loguru import logger
 
-import config
+try:
+    import config
+except ImportError:
+    config = None
 
 
-def load_training_data(days_back: int = 10) -> pd.DataFrame:
+def load_training_data(days_back: int = 10) -> Optional[pd.DataFrame]:
     """
     Load closed trades from database within last N days.
 
@@ -38,27 +40,32 @@ def load_training_data(days_back: int = 10) -> pd.DataFrame:
         DataFrame with columns:
             - trade_id, ticker, side, entry_price, close_price
             - entry_time, close_time, is_win
+        Returns None if database connection is not available.
     """
     logger.info(f"[RETRAIN] Loading trades from last {days_back} days...")
 
-    conn = get_db_connection()
-    query = f"""
-    SELECT
-        trade_id, ticker, side, entry_price, close_price,
-        entry_time, close_time,
-        CASE WHEN (side='SHORT' AND close_price < entry_price)
-             OR (side='LONG' AND close_price > entry_price)
-        THEN 1 ELSE 0 END as is_win
-    FROM trades
-    WHERE status='CLOSED' AND close_time >= datetime('now', '-{days_back} days')
-    ORDER BY close_time DESC
-    """
     try:
+        from src.data.storage.db_manager import get_db_connection
+
+        conn = get_db_connection()
+        query = f"""
+        SELECT
+            trade_id, ticker, side, entry_price, close_price,
+            entry_time, close_time,
+            CASE WHEN (side='SHORT' AND close_price < entry_price)
+                 OR (side='LONG' AND close_price > entry_price)
+            THEN 1 ELSE 0 END as is_win
+        FROM trades
+        WHERE status='CLOSED' AND close_time >= datetime('now', '-{days_back} days')
+        ORDER BY close_time DESC
+        """
         df = pd.read_sql_query(query, conn)
+        conn.close()
         logger.info(f"[RETRAIN] Loaded {len(df)} closed trades")
         return df
-    finally:
-        conn.close()
+    except Exception as e:
+        logger.warning(f"[RETRAIN] Could not load from database: {e}")
+        return None
 
 
 def create_ternary_labels(trades: pd.DataFrame) -> np.ndarray:
@@ -157,11 +164,10 @@ def main():
     logger.info(f"[RETRAIN] Output directory: {output_dir}")
 
     # Step 1: Load trades
-    try:
-        trades = load_training_data(days_back=args.days_back)
-    except Exception as e:
-        logger.error(f"[RETRAIN] Failed to load trades: {e}")
-        logger.info("[RETRAIN] Skipping — database may not be available in this environment")
+    trades = load_training_data(days_back=args.days_back)
+
+    if trades is None:
+        logger.info("[RETRAIN] Database not available in this environment")
         print("\n[FRAMEWORK READY] Separate LONG/SHORT detector training framework is ready.")
         print("To retrain in production:")
         print("  1. Ensure database connection is configured")
