@@ -48,6 +48,10 @@ class EnsembleV5:
         self.meta_model = None
         self.feature_names: Optional[List[str]] = None
         self.class_names = CLASS_NAMES
+        # Separate LONG/SHORT detector support
+        self.long_detector = None
+        self.short_detector = None
+        self.use_separate_detectors = False
 
     def _create_base_models(self) -> Dict:
         """Create multi-class base model instances."""
@@ -158,6 +162,183 @@ class EnsembleV5:
             np.vstack(all_proba),  # (n_oos, N_CLASSES)
             np.array(all_true),
         )
+
+    def train_separate_detectors(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        feature_names: List[str],
+        cv: Optional[PurgedWalkForwardCV] = None,
+    ) -> Dict:
+        """
+        Train separate LONG and SHORT detectors using one-vs-rest stacking.
+
+        This approach decouples the binary detection problems, which helps with
+        class imbalance (e.g., 2 LONGs vs 279 SHORTs).
+
+        Architecture:
+          - LONG detector: Binary classifier (1 vs. {0, 2}) — detects LONG signals
+          - SHORT detector: Binary classifier (2 vs. {0, 1}) — detects SHORT signals
+          - Meta-learner: Stacks both detectors to produce final ternary (n, 3)
+
+        Args:
+            X: Feature matrix (n_samples, n_features)
+            y: Target vector with values {0=HOLD, 1=LONG, 2=SHORT}
+            feature_names: Feature column names
+            cv: Walk-forward CV splitter
+
+        Returns:
+            dict with training metrics
+        """
+        self.feature_names = feature_names
+        if cv is None:
+            cv = PurgedWalkForwardCV()
+
+        logger.info(f"[V5-SEPARATE] Training separate LONG/SHORT detectors (n={len(y)})")
+
+        X_clean = np.nan_to_num(X, nan=0.0)
+        splits = cv.split(len(X_clean))
+
+        # Train LONG detector: 1 vs. (0, 2)
+        logger.info("[V5-SEPARATE] Training LONG detector (binary: 1 vs rest)...")
+        y_long = (y == 1).astype(int)
+
+        import xgboost as xgb
+        import lightgbm as lgb
+
+        long_detector = lgb.LGBMClassifier(
+            objective="binary",
+            n_estimators=300,
+            num_leaves=31,
+            learning_rate=0.04,
+            random_state=42,
+            verbose=-1,
+        )
+
+        # Collect OOS predictions for LONG detector
+        long_oos_proba = []
+        long_oos_indices = None
+
+        for train_idx, test_idx in splits:
+            model = copy.deepcopy(long_detector)
+            model.fit(X_clean[train_idx], y_long[train_idx])
+            proba_1d = model.predict_proba(X_clean[test_idx])[:, 1]
+            long_oos_proba.append(proba_1d)
+            if long_oos_indices is None:
+                long_oos_indices = test_idx
+
+        long_oos_proba = np.concatenate(long_oos_proba)
+
+        # Train SHORT detector: 2 vs. (0, 1)
+        logger.info("[V5-SEPARATE] Training SHORT detector (binary: 2 vs rest)...")
+        y_short = (y == 2).astype(int)
+
+        short_detector = lgb.LGBMClassifier(
+            objective="binary",
+            n_estimators=300,
+            num_leaves=31,
+            learning_rate=0.04,
+            random_state=42,
+            verbose=-1,
+        )
+
+        short_oos_proba = []
+        short_oos_indices = None
+
+        for train_idx, test_idx in splits:
+            model = copy.deepcopy(short_detector)
+            model.fit(X_clean[train_idx], y_short[train_idx])
+            proba_1d = model.predict_proba(X_clean[test_idx])[:, 1]
+            short_oos_proba.append(proba_1d)
+            if short_oos_indices is None:
+                short_oos_indices = test_idx
+
+        short_oos_proba = np.concatenate(short_oos_proba)
+
+        # Stack OOS predictions from both detectors + HOLD confidence
+        # HOLD confidence = 1 - max(P(LONG), P(SHORT))
+        meta_X = np.column_stack([
+            1.0 - np.maximum(long_oos_proba, short_oos_proba),  # P(HOLD)
+            long_oos_proba,                                       # P(LONG)
+            short_oos_proba,                                      # P(SHORT)
+        ])
+        meta_X = np.nan_to_num(meta_X, nan=1.0 / N_CLASSES)
+
+        # Get corresponding labels
+        oos_labels = y[long_oos_indices]
+
+        # Train meta-learner (LightGBM ternary)
+        logger.info("[V5-SEPARATE] Training meta-learner on stacked features...")
+        self.meta_model = lgb.LGBMClassifier(
+            objective="multiclass",
+            num_class=N_CLASSES,
+            n_estimators=150,
+            num_leaves=31,
+            learning_rate=0.05,
+            random_state=42,
+            verbose=-1,
+        )
+        self.meta_model.fit(meta_X, oos_labels)
+
+        # Evaluate on OOS
+        from sklearn.metrics import accuracy_score, log_loss, classification_report
+
+        oos_pred_classes = self.meta_model.predict(meta_X)
+        acc = accuracy_score(oos_labels, oos_pred_classes)
+        try:
+            ll = log_loss(
+                oos_labels,
+                self.meta_model.predict_proba(meta_X),
+                labels=[0, 1, 2],
+            )
+        except Exception:
+            ll = float("nan")
+
+        report = classification_report(
+            oos_labels,
+            oos_pred_classes,
+            target_names=["HOLD", "LONG", "SHORT"],
+            output_dict=True,
+            zero_division=0,
+        )
+
+        logger.info(f"[V5-SEPARATE] OOS accuracy: {acc:.4f}, log_loss: {ll:.4f}")
+        logger.info(
+            f"[V5-SEPARATE] LONG  precision={report.get('LONG',  {}).get('precision', 0):.3f} "
+            f"recall={report.get('LONG',  {}).get('recall', 0):.3f} "
+            f"f1={report.get('LONG',  {}).get('f1-score', 0):.3f}"
+        )
+        logger.info(
+            f"[V5-SEPARATE] SHORT precision={report.get('SHORT', {}).get('precision', 0):.3f} "
+            f"recall={report.get('SHORT', {}).get('recall', 0):.3f} "
+            f"f1={report.get('SHORT', {}).get('f1-score', 0):.3f}"
+        )
+
+        # Train final detectors on ALL data
+        logger.info("[V5-SEPARATE] Training final detectors on full dataset...")
+        self.long_detector = copy.deepcopy(long_detector)
+        self.long_detector.fit(X_clean, y_long)
+
+        self.short_detector = copy.deepcopy(short_detector)
+        self.short_detector.fit(X_clean, y_short)
+
+        # Store that we're using separate detectors
+        self.use_separate_detectors = True
+
+        metrics = {
+            "oos_accuracy": float(acc),
+            "oos_log_loss": float(ll) if not np.isnan(ll) else None,
+            "long_precision": float(report.get("LONG", {}).get("precision", 0)),
+            "long_recall": float(report.get("LONG", {}).get("recall", 0)),
+            "long_f1": float(report.get("LONG", {}).get("f1-score", 0)),
+            "short_precision": float(report.get("SHORT", {}).get("precision", 0)),
+            "short_recall": float(report.get("SHORT", {}).get("recall", 0)),
+            "short_f1": float(report.get("SHORT", {}).get("f1-score", 0)),
+            "hold_f1": float(report.get("HOLD", {}).get("f1-score", 0)),
+            "training_mode": "separate_detectors",
+        }
+        logger.info(f"[V5-SEPARATE] Training complete: {metrics}")
+        return metrics
 
     def train(
         self,
@@ -293,15 +474,34 @@ class EnsembleV5:
         """
         Get ternary prediction probabilities.
 
+        If trained with separate LONG/SHORT detectors, uses those.
+        Otherwise, uses base model ensemble.
+
         Returns:
             Array of shape (n_samples, 3):
               col 0: P(HOLD), col 1: P(LONG), col 2: P(SHORT)
         """
+        X_clean = np.nan_to_num(X, nan=0.0)
+
+        # If using separate detectors, use them
+        if self.use_separate_detectors and self.long_detector is not None and self.short_detector is not None:
+            p_long = self.long_detector.predict_proba(X_clean)[:, 1]
+            p_short = self.short_detector.predict_proba(X_clean)[:, 1]
+            p_hold = 1.0 - np.maximum(p_long, p_short)
+
+            # Stack and pass through meta-learner if available
+            meta_X = np.column_stack([p_hold, p_long, p_short])
+            meta_X = np.nan_to_num(meta_X, nan=1.0 / N_CLASSES)
+
+            if self.meta_model is not None:
+                return self.meta_model.predict_proba(meta_X)
+            else:
+                return meta_X
+
+        # Otherwise use base model ensemble
         if not self.base_models:
             logger.error("[V5] No base models loaded — returning uniform probabilities")
             return np.full((len(X), N_CLASSES), 1.0 / N_CLASSES)
-
-        X_clean = np.nan_to_num(X, nan=0.0)
 
         # Get base model softmax probabilities
         base_preds = {}
@@ -407,10 +607,21 @@ class EnsembleV5:
         path = Path(directory)
         path.mkdir(parents=True, exist_ok=True)
 
+        # Save base models (multiclass ensemble)
         for name, model in self.base_models.items():
             with open(path / f"v5_base_{name}.pkl", "wb") as f:
                 pickle.dump(model, f)
 
+        # Save separate detectors if they exist
+        if self.long_detector is not None:
+            with open(path / "v5_long_detector.pkl", "wb") as f:
+                pickle.dump(self.long_detector, f)
+
+        if self.short_detector is not None:
+            with open(path / "v5_short_detector.pkl", "wb") as f:
+                pickle.dump(self.short_detector, f)
+
+        # Save meta-learner
         if self.meta_model is not None:
             with open(path / "v5_meta_learner.pkl", "wb") as f:
                 pickle.dump(self.meta_model, f)
@@ -422,6 +633,7 @@ class EnsembleV5:
             "base_models": list(self.base_models.keys()),
             "feature_names": self.feature_names,
             "params": self.params,
+            "use_separate_detectors": self.use_separate_detectors,
         }
         with open(path / "v5_ensemble_metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
@@ -436,14 +648,30 @@ class EnsembleV5:
             metadata = json.load(f)
         self.feature_names = metadata.get("feature_names")
         self.params = metadata.get("params", {})
+        self.use_separate_detectors = metadata.get("use_separate_detectors", False)
 
-        for name in metadata["base_models"]:
-            with open(path / f"v5_base_{name}.pkl", "rb") as f:
-                self.base_models[name] = pickle.load(f)
+        # Load base models (multiclass ensemble)
+        for name in metadata.get("base_models", []):
+            model_path = path / f"v5_base_{name}.pkl"
+            if model_path.exists():
+                with open(model_path, "rb") as f:
+                    self.base_models[name] = pickle.load(f)
 
+        # Load separate detectors if they exist
+        long_path = path / "v5_long_detector.pkl"
+        if long_path.exists():
+            with open(long_path, "rb") as f:
+                self.long_detector = pickle.load(f)
+
+        short_path = path / "v5_short_detector.pkl"
+        if short_path.exists():
+            with open(short_path, "rb") as f:
+                self.short_detector = pickle.load(f)
+
+        # Load meta-learner
         meta_path = path / "v5_meta_learner.pkl"
         if meta_path.exists():
             with open(meta_path, "rb") as f:
                 self.meta_model = pickle.load(f)
 
-        logger.info(f"[V5] Ensemble loaded: {list(self.base_models.keys())}")
+        logger.info(f"[V5] Ensemble loaded: separate_detectors={self.use_separate_detectors}, base_models={list(self.base_models.keys())}")
