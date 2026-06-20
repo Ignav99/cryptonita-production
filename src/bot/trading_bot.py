@@ -946,25 +946,25 @@ class TradingBot:
             # Still allow smart rotation below
 
         # 0e. Market regime filter (BTC 4h EMA slope)
+        _signal_direction = signal.get('signal_name', 'LONG')
         if settings.MARKET_REGIME.get('enabled', True):
             try:
-                btc_candles = self.binance_data.fetch_klines(
+                btc_candles = self.binance_data.get_historical_klines(
                     'BTCUSDT',
-                    settings.MARKET_REGIME.get('timeframe', '4h'),
-                    limit=100
+                    interval=settings.MARKET_REGIME.get('timeframe', '4h'),
+                    lookback_days=17
                 )
                 regime = self.regime_detector.detect(btc_candles)
-                
-                # Signal direction determines which regime check applies
-                if signal_name == 'SHORT' and not self.regime_detector.allow_short(regime):
-                    logger.info(f"🚫 Signal blocked: {signal_name} SHORT denied (regime={regime}, BTC EMA slope bearish protection)")
+
+                if _signal_direction == 'SHORT' and not self.regime_detector.allow_short(regime):
+                    logger.info(f"🚫 Signal blocked: {ticker} SHORT denied (regime={regime})")
                     return
-                
-                if signal_name == 'LONG' and not self.regime_detector.allow_long(regime):
-                    logger.info(f"🚫 Signal blocked: {signal_name} LONG denied (regime={regime}, BTC EMA slope bearish protection)")
+
+                if _signal_direction == 'LONG' and not self.regime_detector.allow_long(regime):
+                    logger.info(f"🚫 Signal blocked: {ticker} LONG denied (regime={regime})")
                     return
-                
-                logger.info(f"📊 Market regime: {regime} (BTC 4h EMA slope)")
+
+                logger.info(f"📊 Market regime: {regime} (BTC 4h EMA slope={self.regime_detector.ema_slope:.5f})")
             except Exception as e:
                 logger.warning(f"⚠️ Market regime check failed (continuing): {e}")
 
