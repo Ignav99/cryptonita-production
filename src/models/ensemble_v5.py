@@ -213,21 +213,22 @@ class EnsembleV5:
             learning_rate=0.04,
             random_state=42,
             verbose=-1,
+            is_unbalance=True,  # auto-weights minority class (LONG) up
         )
 
         # Collect OOS predictions for LONG detector
         long_oos_proba = []
-        long_oos_indices = None
+        all_test_indices = []
 
         for train_idx, test_idx in splits:
             model = copy.deepcopy(long_detector)
             model.fit(X_clean[train_idx], y_long[train_idx])
             proba_1d = model.predict_proba(X_clean[test_idx])[:, 1]
             long_oos_proba.append(proba_1d)
-            if long_oos_indices is None:
-                long_oos_indices = test_idx
+            all_test_indices.append(test_idx)
 
         long_oos_proba = np.concatenate(long_oos_proba)
+        all_test_indices = np.concatenate(all_test_indices)
 
         # Train SHORT detector: 2 vs. (0, 1)
         logger.info("[V5-SEPARATE] Training SHORT detector (binary: 2 vs rest)...")
@@ -243,15 +244,12 @@ class EnsembleV5:
         )
 
         short_oos_proba = []
-        short_oos_indices = None
 
         for train_idx, test_idx in splits:
             model = copy.deepcopy(short_detector)
             model.fit(X_clean[train_idx], y_short[train_idx])
             proba_1d = model.predict_proba(X_clean[test_idx])[:, 1]
             short_oos_proba.append(proba_1d)
-            if short_oos_indices is None:
-                short_oos_indices = test_idx
 
         short_oos_proba = np.concatenate(short_oos_proba)
 
@@ -264,8 +262,8 @@ class EnsembleV5:
         ])
         meta_X = np.nan_to_num(meta_X, nan=1.0 / N_CLASSES)
 
-        # Get corresponding labels
-        oos_labels = y[long_oos_indices]
+        # Get corresponding labels (aligned with all_test_indices across all folds)
+        oos_labels = y[all_test_indices]
 
         # Train meta-learner (LightGBM ternary)
         logger.info("[V5-SEPARATE] Training meta-learner on stacked features...")

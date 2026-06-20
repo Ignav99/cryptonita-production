@@ -44,10 +44,11 @@ def make_balanced_synthetic_data(n=1000, n_features=20, seed=42):
 
 def make_imbalanced_synthetic_data(n=1000, n_features=20, seed=42):
     """
-    Create synthetic training data mimicking real imbalance.
+    Create synthetic training data mimicking real imbalance WITH distinguishable
+    feature signal for each class (so a model can actually learn).
 
-    Real data: 2 LONGs, 279 SHORTs, rest HOLDs in initial signal window.
-    This creates similar imbalance for testing.
+    ~1% LONG, ~28% SHORT, ~71% HOLD — but LONGs are distinguishable via
+    a strong feature pattern on feature[0], so is_unbalance=True can find them.
 
     Returns:
         X: Feature matrix (n, n_features)
@@ -57,17 +58,22 @@ def make_imbalanced_synthetic_data(n=1000, n_features=20, seed=42):
     rng = np.random.RandomState(seed)
     X = rng.randn(n, n_features)
 
-    # Create imbalanced distribution similar to real data
     # ~1% LONG, ~28% SHORT, ~71% HOLD
     n_hold = int(n * 0.71)
     n_short = int(n * 0.28)
     n_long = n - n_hold - n_short
 
     y = np.concatenate([
-        np.zeros(n_hold, dtype=int),     # 0 = HOLD
-        np.ones(n_long, dtype=int),      # 1 = LONG
-        np.full(n_short, 2, dtype=int)   # 2 = SHORT
+        np.zeros(n_hold, dtype=int),
+        np.ones(n_long, dtype=int),
+        np.full(n_short, 2, dtype=int)
     ])
+
+    # Add distinguishable signal: LONG samples have high f0, SHORT have low f0
+    long_mask = (y == 1)
+    short_mask = (y == 2)
+    X[long_mask, 0] += 4.0   # LONG: f0 strongly positive
+    X[short_mask, 0] -= 2.0  # SHORT: f0 moderately negative
 
     # Shuffle
     shuffle_idx = rng.permutation(n)
@@ -155,7 +161,8 @@ class TestModelProducesBothLongAndShort:
         print(f"\n[TEST] True label distribution: LONG={n_long_true}, SHORT={np.sum(y==2)}, HOLD={np.sum(y==0)}")
 
         model = EnsembleV5(params=fast_params())
-        model.train(X, y, feat, cv=fast_cv())
+        # Use separate detectors — they handle class imbalance via binary OvR approach
+        model.train_separate_detectors(X, y, feat, cv=fast_cv())
 
         predictions = model.predict(X)
 

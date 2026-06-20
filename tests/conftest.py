@@ -16,13 +16,8 @@ external_mocks = {
     'ccxt.async_support': MagicMock(),
     'ta': MagicMock(),
     'pandas_ta': MagicMock(),
-    'sklearn': MagicMock(),
-    'sklearn.ensemble': MagicMock(),
-    'sklearn.preprocessing': MagicMock(),
-    'sklearn.model_selection': MagicMock(),
-    'sklearn.metrics': MagicMock(),
-    'sklearn.neural_network': MagicMock(),
-    'joblib': MagicMock(),
+    # sklearn and joblib removed: both are installed and used by xgboost/lightgbm
+    # at runtime — MagicMocks break XGBClassifier and LGBMClassifier instantiation
     'requests': MagicMock(),
     'aiohttp': MagicMock(),
     'binance': MagicMock(),
